@@ -33,11 +33,28 @@ export class ApiError extends Error {
 
 export type ExportFormat = "json" | "csv" | "md";
 
+export interface HubScanOptions {
+  file?: string | null;
+  token?: string | null;
+  onProgress?: (p: { requests: number; bytes: number; stage: string }) => void;
+}
+
+/** Read a model from the Hugging Face Hub in this page (header bytes only). Shared by both editions. */
+async function scanHubInPage(input: string, opts: HubScanOptions): Promise<ScanResult> {
+  const { scanHub } = await import("./engine/hfhub");
+  try {
+    return await scanHub(input, opts);
+  } catch (e) {
+    throw new ApiError((e as Error).message, 400);
+  }
+}
+
 export interface Api {
   roots(): Promise<FsRoot[]>;
   list(path: string): Promise<FsListing>;
   scan(path: string): Promise<ScanResult>;
   scanFiles(files: File[]): Promise<ScanResult>;
+  scanHub(input: string, opts?: HubScanOptions): Promise<ScanResult>;
   scans(): Promise<ScanSummary[]>;
   getScan(id: string): Promise<ScanResult>;
   deleteScan(id: string): Promise<unknown>;
@@ -88,6 +105,8 @@ const httpApi: Api = {
   list: (path) => request<FsListing>("GET", `/api/fs/list?path=${q(path)}`),
   scan: (path) => request<ScanResult>("POST", "/api/scan", { path }),
   scanFiles: () => Promise.reject(new ApiError("file picking is only used by the browser edition", 400)),
+  // The page reads the Hub directly, then stores the result in the local history.
+  scanHub: async (input, opts = {}) => request<ScanResult>("POST", "/api/scans/import", await scanHubInPage(input, opts)),
   scans: () => request<ScanSummary[]>("GET", "/api/scans"),
   getScan: (id) => request<ScanResult>("GET", `/api/scans/${q(id)}`),
   deleteScan: (id) => request<unknown>("DELETE", `/api/scans/${q(id)}`),
@@ -148,6 +167,11 @@ const browserApi: Api = {
     } catch (e) {
       throw new ApiError((e as Error).message, 400);
     }
+  },
+  async scanHub(input, opts = {}) {
+    const r = await scanHubInPage(input, opts);
+    await (await loadEngine()).store.saveScan(r);
+    return r;
   },
   scans: async () => (await loadEngine()).store.listScans(),
   getScan: must,

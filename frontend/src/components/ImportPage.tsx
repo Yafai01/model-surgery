@@ -3,6 +3,7 @@ import { BROWSER_EDITION, api } from "../api";
 import { fmtBytes, fmtCount, fmtTime } from "../format";
 import type { FsEntry, FsListing, FsRoot, ScanResult, ScanSummary } from "../types";
 import { Callout, Spinner } from "./common";
+import HubImport from "./HubImport";
 
 interface Props {
   onScanned: (r: ScanResult) => void;
@@ -111,6 +112,8 @@ function BrowserImport({ onScanned, recent, onOpen }: Props) {
           <p>Pick a GGUF file or a Hugging Face model folder. Everything runs in this tab: only the header bytes are read, and nothing is uploaded.</p>
         </div>
       </div>
+
+      <HubImport onScanned={onScanned} />
 
       <div
         className="card"
@@ -251,6 +254,8 @@ function LocalImport({ onScanned, onError, recent, onOpen }: Props) {
           <p>Select a GGUF file or a Hugging Face directory (config.json + safetensors). Only headers are read; tensor data is never loaded.</p>
         </div>
       </div>
+
+      <HubImport onScanned={onScanned} />
 
       <div className="card">
         <form

@@ -7,6 +7,7 @@ import { GGML_BY_NAME, UNQUANTIZED_FTYPES, ftypeLabel } from "./ggml";
 import { FormatError, type GGUFFile, ggufGet, isGGUF, readGGUF } from "./gguf";
 import { PICKLE_SUFFIXES, UnsupportedFormatError, findConfig, readHFFolder, relPath, suffix } from "./hf";
 import { readSafetensors, type SafetensorsFile } from "./safetensors";
+import type { FileLike } from "./source";
 
 export const APP_VERSION = "0.1.0-web";
 const SPLIT_RE = /^(.+)-(\d{5})-of-(\d{5})\.gguf$/i;
@@ -289,12 +290,12 @@ interface Partial {
 
 // ------------------------------------------------------------------ GGUF
 
-async function scanGGUF(file: File, all: File[]): Promise<Partial> {
+async function scanGGUF(file: FileLike, all: FileLike[]): Promise<Partial> {
   const g0 = await readGGUF(file);
   const errors = [...g0.errors];
   const warnings = [...g0.warnings];
   const notes: string[] = [];
-  const parsed: { file: File; g: GGUFFile }[] = [{ file, g: g0 }];
+  const parsed: { file: FileLike; g: GGUFFile }[] = [{ file, g: g0 }];
 
   const count = ggufGet(g0, "split.count");
   if (isInt(count) && count > 1) {
@@ -387,7 +388,7 @@ function stTensors(shards: SafetensorsFile[], base = 0): TensorRecord[] {
   return out;
 }
 
-async function scanHF(files: File[]): Promise<Partial> {
+async function scanHF(files: FileLike[]): Promise<Partial> {
   const hf = await readHFFolder(files);
   const notes: string[] = [];
   const facts = new Facts();
@@ -453,7 +454,7 @@ async function scanHF(files: File[]): Promise<Partial> {
   };
 }
 
-async function scanSingleSafetensors(file: File): Promise<Partial> {
+async function scanSingleSafetensors(file: FileLike): Promise<Partial> {
   const sf = await readSafetensors(file);
   const tensors = stTensors([sf]);
   return {
@@ -477,7 +478,7 @@ async function scanSingleSafetensors(file: File): Promise<Partial> {
 // ------------------------------------------------------------------ entry point
 
 /** Scan files the user picked: a .gguf (plus split shards), a .safetensors, or a whole HF folder. */
-export async function scanFiles(files: File[]): Promise<ScanResult> {
+export async function scanFiles(files: FileLike[]): Promise<ScanResult> {
   if (!files.length) throw new ScanError("no files selected");
   let data: Partial;
   let redirect: string | null = null;

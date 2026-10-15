@@ -17,7 +17,38 @@ interface Props {
 }
 
 export default function QuantizePage(props: Props) {
+  if (props.scan.path.startsWith("hf://")) return <RemoteModel scan={props.scan} onOpenScan={props.onOpenScan} />;
   return BROWSER_EDITION ? <LocalAppOnly scan={props.scan} onOpenScan={props.onOpenScan} /> : <QuantizeWorkflow {...props} />;
+}
+
+function RemoteModel({ scan, onOpenScan }: Pick<Props, "scan" | "onOpenScan">) {
+  const repo = scan.hub?.repo ?? "";
+  const file = scan.hub?.scanned_target && scan.hub.scanned_target !== "repository root" ? scan.hub.scanned_target : null;
+  const cmd = file ? `huggingface-cli download ${repo} ${file} --local-dir models/${repo.split("/")[1]}` : `huggingface-cli download ${repo} --local-dir models/${repo.split("/")[1]}`;
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h2>Quantize / convert</h2>
+          <p>This model was inspected remotely on the Hugging Face Hub — only its headers were read, so there are no weights here to quantize.</p>
+        </div>
+      </div>
+      <Callout kind="warn" title="Download it first.">
+        Quantization and conversion need the full weights on your machine. Download the model, then scan the local copy in the {BROWSER_EDITION ? "local app" : "Import page"} to
+        quantize it. The size estimates for every precision are already available in the Memory Lab.
+      </Callout>
+      <div className="card">
+        <pre className="argv mono" style={{ whiteSpace: "pre-wrap" }}>
+          {cmd}
+        </pre>
+        <div className="row" style={{ marginTop: 12 }}>
+          <button className="btn" onClick={() => onOpenScan(scan.id, "memory")}>
+            See size estimates per precision →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function LocalAppOnly({ scan, onOpenScan }: Pick<Props, "scan" | "onOpenScan">) {

@@ -3,6 +3,7 @@
 // All counts, lengths, shapes and offsets are validated against the real file size.
 
 import { GGML_BY_ID, type GGMLType, tensorNBytes } from "./ggml";
+import type { ByteSource } from "./source";
 
 export class FormatError extends Error {}
 class NeedMore extends Error {
@@ -276,14 +277,14 @@ function parse(buf: ArrayBuffer, fileSize: number): GGUFFile {
   return { fileSize, version, byteOrder, alignment, dataOffset, metadata, tensors, errors: errs, warnings };
 }
 
-export async function isGGUF(file: Blob): Promise<boolean> {
+export async function isGGUF(file: ByteSource): Promise<boolean> {
   const b = new Uint8Array(await file.slice(0, 4).arrayBuffer());
   return b.length === 4 && String.fromCharCode(...b) === "GGUF";
 }
 
 /** Parse a GGUF header, reading only as much of the file as the header needs. */
-export async function readGGUF(file: Blob): Promise<GGUFFile> {
-  let size = Math.min(file.size, 8 * 1024 * 1024);
+export async function readGGUF(file: ByteSource): Promise<GGUFFile> {
+  let size = Math.min(file.size, file.headerChunk ?? 8 * 1024 * 1024);
   for (;;) {
     const buf = await file.slice(0, size).arrayBuffer();
     try {

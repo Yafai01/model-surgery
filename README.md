@@ -6,10 +6,13 @@ Model Surgery opens GGUF files and Hugging Face safetensors directories, rebuild
 
 It reads headers only. Inspecting a model needs no PyTorch or CUDA, and tensor data is never loaded.
 
-**▶ Try it in your browser: [model-surgery.vercel.app](https://model-surgery.vercel.app).** The hosted *browser edition* parses the model in your tab with the File API, reading only the header bytes, so a multi-GB GGUF scans in well under a second. **Nothing is uploaded.** The site's Content-Security-Policy blocks connections to any other host, and scan history stays in your browser's IndexedDB. It covers inspection, the 2D/3D architecture view, the Memory Lab, exports and comparison. Quantization needs llama.cpp on your own machine, so use the local app below for that.
+**▶ Try it in your browser: [model-surgery.vercel.app](https://model-surgery.vercel.app).** The hosted *browser edition* parses the model in your tab with the File API, reading only the header bytes, so a multi-GB GGUF scans in well under a second. **Nothing is uploaded.** The site's Content-Security-Policy only allows connections back to the site itself and to huggingface.co (for Hub links), and scan history stays in your browser's IndexedDB. It covers inspection, the 2D/3D architecture view, the Memory Lab, exports and comparison. Quantization needs llama.cpp on your own machine, so use the local app below for that.
+
+**Paste a Hugging Face link** (`https://huggingface.co/Qwen/Qwen3-30B-A3B`, a GGUF repo, or a `/blob/…/model.gguf` file link) and Model Surgery inspects it **without downloading the weights**. It reads only the header bytes over HTTP range requests, so a 30B MoE takes about 5 MiB of traffic. Alongside the full architecture, tensor and memory analysis, it shows what the Hub reports about the repository: downloads, likes, license, base model, tags, gating, file list, model card and every GGUF variant (one click to inspect another). It also cross-checks the Hub's parameter count against the tensors actually read. Gated models work with a read token, which is kept in the tab's memory and sent only to huggingface.co.
 
 | | Browser edition (Vercel) | Local app |
 |---|---|---|
+| Inspect a Hugging Face link (no download) | ✅ | ✅ |
 | Inspect GGUF / safetensors / HF folders | ✅ | ✅ |
 | Architecture 2D/3D, tensors, metadata | ✅ | ✅ |
 | Memory Lab, device profiles | ✅ | ✅ |

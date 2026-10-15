@@ -292,6 +292,10 @@ class JobManager:
             target = "invalid"
         out_name = f"{src.stem}.{target}.gguf" if req.operation == "quantize" else f"{_slug(src.name)}.{target.upper()}.gguf"
 
+        if scan.is_remote:
+            raise PermissionError(
+                "this scan was read remotely from the Hugging Face Hub; download the model, scan the local copy, then quantize that"
+            )
         if not scan.integrity.valid:
             blockers.append("source failed integrity checks; fix or re-download the model first")
 

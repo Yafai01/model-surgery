@@ -136,3 +136,42 @@ def test_real_gguf(client):
     r = client.post("/api/scan", json={"path": str(p)}, headers=H).json()
     assert r["integrity"]["valid"], r["integrity"]["errors"]
     assert sum(t["n_bytes"] for t in r["tensors"]) <= p.stat().st_size
+
+
+def _as_remote(scan_json: dict) -> dict:
+    scan_json = dict(scan_json)
+    scan_json["path"] = "hf://owner/model@abc123"
+    scan_json["files"] = [{**f, "path": "hf://owner/model@abc123/" + f["path"].replace("\\", "/").split("/")[-1]} for f in scan_json["files"]]
+    scan_json["hub"] = {"repo": "owner/model", "downloads": 5}
+    return scan_json
+
+
+def test_import_remote_scan(client, tmp_path):
+    local = client.post("/api/scan", json={"path": str(llama_like_gguf(tmp_path / "m.gguf"))}, headers=H).json()
+    remote = _as_remote(local)
+    remote["id"] = "remote1"
+    assert client.post("/api/scans/import", json=remote).status_code == 403  # CSRF header required
+    r = client.post("/api/scans/import", json=remote, headers=H)
+    assert r.status_code == 200 and r.json()["hub"]["repo"] == "owner/model"
+    assert client.get("/api/scans/remote1").json()["path"].startswith("hf://")
+    m = client.post("/api/scans/remote1/memory", json={"device_id": "jetson-orin-nano-8gb"}, headers=H)
+    assert m.status_code == 200
+
+
+def test_import_rejects_local_paths(client, tmp_path):
+    local = client.post("/api/scan", json={"path": str(llama_like_gguf(tmp_path / "m.gguf"))}, headers=H).json()
+    local["id"] = "spoof"
+    assert client.post("/api/scans/import", json=local, headers=H).status_code == 400
+    mixed = _as_remote(local)
+    mixed["files"][0]["path"] = "C:/Windows/System32/x.gguf"
+    assert client.post("/api/scans/import", json=mixed, headers=H).status_code == 400
+    assert client.post("/api/scans/import", content=b"{not json", headers={**H, "Content-Type": "application/json"}).status_code == 422
+
+
+def test_remote_scans_cannot_be_quantized(client, tmp_path):
+    local = client.post("/api/scan", json={"path": str(llama_like_gguf(tmp_path / "m.gguf"))}, headers=H).json()
+    remote = _as_remote(local)
+    remote["id"] = "remote2"
+    client.post("/api/scans/import", json=remote, headers=H)
+    r = client.post("/api/quantize/plan", json={"scan_id": "remote2", "operation": "quantize", "target": "Q4_0"}, headers=H)
+    assert r.status_code == 403 and "Hugging Face Hub" in r.json()["detail"]

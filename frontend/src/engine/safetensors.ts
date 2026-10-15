@@ -1,6 +1,7 @@
 // Browser safetensors header reader. Port of backend/model_surgery/formats/safetensors_reader.py.
 
 import { FormatError } from "./gguf";
+import type { ByteSource } from "./source";
 
 const MAX_HEADER_BYTES = 100 * 1024 * 1024;
 const MAX_TENSORS = 1_000_000;
@@ -66,15 +67,16 @@ export function assertNoDuplicateKeys(text: string, what: string) {
 
 const isUint = (x: unknown): x is number => typeof x === "number" && Number.isInteger(x) && x >= 0;
 
-export async function readSafetensors(file: Blob): Promise<SafetensorsFile> {
+export async function readSafetensors(file: ByteSource): Promise<SafetensorsFile> {
   const fileSize = file.size;
   if (fileSize < 8) throw new FormatError("file too small to be safetensors");
   const n = Number(new DataView(await file.slice(0, 8).arrayBuffer()).getBigUint64(0, true));
   if (n > MAX_HEADER_BYTES) throw new FormatError(`header length ${n} exceeds ${MAX_HEADER_BYTES} byte limit`);
   if (8 + n > fileSize) throw new FormatError(`header length ${n} exceeds file size ${fileSize}`);
+  const raw = await file.slice(8, 8 + n).arrayBuffer(); // read errors must propagate as-is
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(await file.slice(8, 8 + n).arrayBuffer());
+    text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
   } catch {
     throw new FormatError("header is not valid UTF-8");
   }

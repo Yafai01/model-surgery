@@ -3,6 +3,7 @@
 
 import { FormatError } from "./gguf";
 import { assertNoDuplicateKeys, readSafetensors, type SafetensorsFile } from "./safetensors";
+import type { FileLike } from "./source";
 
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
 const MAX_SHARDS = 4096;
@@ -15,7 +16,7 @@ const SIDE_FILES = new Set([
 
 export class UnsupportedFormatError extends Error {}
 
-export const relPath = (f: File) => (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+export const relPath = (f: FileLike) => f.webkitRelativePath || f.name;
 export const suffix = (name: string) => (name.includes(".") ? name.slice(name.lastIndexOf(".")).toLowerCase() : "");
 export const byCodePoint = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0); // Python sorted() order
 const dirOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
@@ -23,20 +24,34 @@ const dirOf = (p: string) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) :
 export interface HFFolder {
   dir: string;
   config: Record<string, unknown>;
-  configFile: File;
-  indexFile: File | null;
-  shards: { file: File; st: SafetensorsFile }[];
-  sideFiles: File[];
-  unparsed: { file: File; reason: string }[];
+  configFile: FileLike;
+  indexFile: FileLike | null;
+  shards: { file: FileLike; st: SafetensorsFile }[];
+  sideFiles: FileLike[];
+  unparsed: { file: FileLike; reason: string }[];
   errors: string[];
   warnings: string[];
 }
 
-export async function readJsonLimited(f: File, max = MAX_JSON_BYTES): Promise<unknown> {
+export async function mapPool<T, R>(items: T[], limit: number, fn: (x: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
+export async function readJsonLimited(f: FileLike, max = MAX_JSON_BYTES): Promise<unknown> {
   if (f.size > max) throw new FormatError(`${f.name} is ${f.size} bytes; refusing to parse JSON larger than ${max}`);
+  const raw = await f.arrayBuffer(); // read errors (e.g. network) must propagate as-is
   let text: string;
   try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(await f.arrayBuffer());
+    text = new TextDecoder("utf-8", { fatal: true }).decode(raw);
   } catch {
     throw new FormatError(`${f.name} is not valid UTF-8`);
   }
@@ -51,12 +66,12 @@ export async function readJsonLimited(f: File, max = MAX_JSON_BYTES): Promise<un
 }
 
 /** Locate the model folder (the shallowest folder containing config.json) among the picked files. */
-export function findConfig(files: File[]): File | null {
+export function findConfig(files: FileLike[]): FileLike | null {
   const configs = files.filter((f) => f.name === "config.json").sort((a, b) => relPath(a).split("/").length - relPath(b).split("/").length);
   return configs[0] ?? null;
 }
 
-export async function readHFFolder(files: File[]): Promise<HFFolder> {
+export async function readHFFolder(files: FileLike[]): Promise<HFFolder> {
   const configFile = findConfig(files);
   if (!configFile) throw new FormatError("folder has no config.json; not a Hugging Face model directory");
   const dir = dirOf(relPath(configFile));
@@ -68,8 +83,8 @@ export async function readHFFolder(files: File[]): Promise<HFFolder> {
 
   const errors: string[] = [];
   const warnings: string[] = [];
-  const unparsed: { file: File; reason: string }[] = [];
-  const sideFiles: File[] = [];
+  const unparsed: { file: FileLike; reason: string }[] = [];
+  const sideFiles: FileLike[] = [];
   for (const f of [...inDir].sort((a, b) => byCodePoint(a.name, b.name))) {
     const s = suffix(f.name);
     if (PICKLE_SUFFIXES.has(s) && f.name !== "training_args.bin") unparsed.push({ file: f, reason: "pickle-based PyTorch weights are never opened (unpickling can execute code)" });
@@ -78,7 +93,7 @@ export async function readHFFolder(files: File[]): Promise<HFFolder> {
   }
 
   const indexFile = byName.get("model.safetensors.index.json") ?? null;
-  let shardFiles: File[];
+  let shardFiles: FileLike[];
   let weightMap: Record<string, string> | null = null;
   if (indexFile) {
     const index = (await readJsonLimited(indexFile, 64 * 1024 * 1024)) as { weight_map?: unknown };
@@ -106,16 +121,23 @@ export async function readHFFolder(files: File[]): Promise<HFFolder> {
     throw new FormatError("no safetensors weight files found in the folder");
   }
 
-  const shards: { file: File; st: SafetensorsFile }[] = [];
-  const seen = new Map<string, string>();
-  for (const f of shardFiles) {
-    let st: SafetensorsFile;
+  // Read shard headers concurrently (matters for remote Hub files), then process in order.
+  const read = await mapPool(shardFiles, 6, async (f) => {
     try {
-      st = await readSafetensors(f);
+      return { f, st: await readSafetensors(f) };
     } catch (e) {
-      errors.push(`${f.name}: ${(e as Error).message}`);
+      return { f, err: (e as Error).message };
+    }
+  });
+  const shards: { file: FileLike; st: SafetensorsFile }[] = [];
+  const seen = new Map<string, string>();
+  for (const r of read) {
+    const f = r.f;
+    if (!("st" in r) || !r.st) {
+      errors.push(`${f.name}: ${r.err}`);
       continue;
     }
+    const st = r.st;
     errors.push(...st.errors.map((m) => `${f.name}: ${m}`));
     warnings.push(...st.warnings.slice(0, 10).map((m) => `${f.name}: ${m}`));
     for (const t of st.tensors) {

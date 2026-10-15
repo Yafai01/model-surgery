@@ -35,11 +35,12 @@ from .schemas import ScanResult, ScanSummary
 from .tooling import ToolsReport
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+MAX_IMPORT_BYTES = 64 * 1024 * 1024
 CSRF_HEADER = "x-model-surgery"
 MODEL_SUFFIXES = {".gguf": "gguf", ".safetensors": "safetensors", ".json": "json", ".bin": "pickle", ".pt": "pickle", ".pth": "pickle", ".ckpt": "pickle", ".onnx": "onnx"}
 CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
-    "connect-src 'self'; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+    "connect-src 'self' https://huggingface.co https://*.huggingface.co https://*.hf.co; font-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 )
 
 
@@ -180,6 +181,25 @@ def create_app(settings: Settings | None = None, job_manager: JobManager | None 
     @app.post("/api/scan", response_model=ScanResult)
     def scan(req: ScanRequest) -> ScanResult:
         r = scan_path(req.path, settings)
+        history.save_scan(r)
+        return r
+
+    @app.post("/api/scans/import", response_model=ScanResult)
+    async def import_remote_scan(request: Request) -> ScanResult:
+        """Store a scan the page produced by reading a model from the Hugging Face Hub.
+
+        Only remote (hf://) scans are accepted, so an imported record can never point at a local path
+        that the quantization workflow would act on.
+        """
+        body = await request.body()
+        if len(body) > MAX_IMPORT_BYTES:
+            raise HTTPException(413, "scan too large")
+        try:
+            r = ScanResult.model_validate_json(body)
+        except ValueError as e:
+            raise HTTPException(422, f"invalid scan: {str(e)[:300]}") from None
+        if not r.is_remote or not all(f.path.startswith("hf://") for f in r.files):
+            raise HTTPException(400, "only Hugging Face Hub (hf://) scans can be imported")
         history.save_scan(r)
         return r
 

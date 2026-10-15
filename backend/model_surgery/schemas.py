@@ -135,6 +135,12 @@ class ScanResult(BaseModel):
     architecture: ArchitectureSummary
     metadata: list[MetadataEntry]
     tensors: list[TensorRecord]
+    # Repository facts reported by the Hugging Face Hub API, for scans of hf:// models (see frontend engine/hfhub.ts).
+    hub: dict[str, Any] | None = None
+
+    @property
+    def is_remote(self) -> bool:
+        return self.path.startswith("hf://")
 
     def fact(self, key: str) -> Fact | None:
         return next((f for f in self.hyperparameters if f.key == key), None)

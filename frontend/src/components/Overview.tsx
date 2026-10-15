@@ -2,8 +2,19 @@ import type { Tab } from "../App";
 import { fmtBytes, fmtCount, fmtInt, fmtValue } from "../format";
 import type { ScanResult } from "../types";
 import { Callout, List, Prov, ProvLegend, Stat } from "./common";
+import HubCard from "./HubCard";
 
-export default function Overview({ scan, onNavigate }: { scan: ScanResult; onNavigate: (t: Tab) => void }) {
+export default function Overview({
+  scan,
+  onNavigate,
+  onHubInspect,
+  hubBusy,
+}: {
+  scan: ScanResult;
+  onNavigate: (t: Tab) => void;
+  onHubInspect: (repo: string, file: string) => void;
+  hubBusy: string | null;
+}) {
   const params = scan.hyperparameters.find((f) => f.key === "n_params");
   const logical = scan.hyperparameters.find((f) => f.key === "n_params_logical");
   const layers = scan.hyperparameters.find((f) => f.key === "n_layers");
@@ -21,6 +32,8 @@ export default function Overview({ scan, onNavigate }: { scan: ScanResult; onNav
         </div>
         <ProvLegend />
       </div>
+
+      {scan.hub && <HubCard scan={scan} busy={hubBusy} onInspect={(file) => onHubInspect(scan.hub!.repo, file)} />}
 
       {!scan.integrity.valid && (
         <Callout kind="bad" title={`Integrity check failed (${scan.integrity.errors.length}).`}>

@@ -11,6 +11,7 @@ import QuantizePage from "./components/QuantizePage";
 import ReportsPage from "./components/ReportsPage";
 import TensorTable from "./components/TensorTable";
 import { fmtBytes } from "./format";
+import { getHubToken } from "./hubSession";
 import type { ScanResult, ScanSummary } from "./types";
 
 export type Tab = "import" | "overview" | "architecture" | "tensors" | "metadata" | "memory" | "quantize" | "reports" | "history";
@@ -81,6 +82,21 @@ export default function App() {
     [refreshHistory],
   );
 
+  const [hubBusy, setHubBusy] = useState<string | null>(null);
+  const inspectHub = useCallback(
+    async (repo: string, file: string) => {
+      setHubBusy(file);
+      try {
+        onScanned(await api.scanHub(repo, { file, token: getHubToken() }));
+      } catch (e) {
+        setError((e as Error).message);
+      } finally {
+        setHubBusy(null);
+      }
+    },
+    [onScanned],
+  );
+
   const openScan = useCallback(
     async (id: string, nextTab: Tab = "overview") => {
       try {
@@ -100,7 +116,7 @@ export default function App() {
     if (!scan) return null;
     switch (tab) {
       case "overview":
-        return <Overview scan={scan} onNavigate={setTab} />;
+        return <Overview scan={scan} onNavigate={setTab} onHubInspect={inspectHub} hubBusy={hubBusy} />;
       case "architecture":
         return <ArchitecturePage scan={scan} />;
       case "tensors":
@@ -171,6 +187,12 @@ export default function App() {
                 <div className="topbar-path mono">{scan.path}</div>
               </div>
               <span className="spacer" />
+              {hubBusy && (
+                <span className="small dim">
+                  inspecting {hubBusy.split("/").pop()}…
+                </span>
+              )}
+              {scan.hub && <span className="badge warn">🤗 remote</span>}
               <span className="badge info">
                 {scan.format.name} {scan.format.version ?? ""}
               </span>

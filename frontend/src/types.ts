@@ -116,6 +116,40 @@ export interface ScanResult {
   architecture: ArchitectureSummary;
   metadata: MetadataEntry[];
   tensors: TensorRecord[];
+  hub?: HubInfo | null;
+}
+
+/** Repository facts reported by the Hugging Face Hub API (not read from the weights). */
+export interface HubInfo {
+  repo: string;
+  url: string;
+  revision: string;
+  sha: string;
+  scanned_target: string; // "repository root" or a file path inside the repo
+  author: string | null;
+  pipeline_tag: string | null;
+  library_name: string | null;
+  license: string | null;
+  downloads: number | null;
+  likes: number | null;
+  created_at: string | null;
+  last_modified: string | null;
+  gated: string | null; // null = not gated, otherwise "auto" / "manual"
+  private: boolean;
+  tags: string[];
+  base_models: string[];
+  datasets: string[];
+  languages: string[];
+  api_parameters: { total: number | null; by_dtype: Record<string, number> } | null;
+  api_gguf: { total: number | null; architecture: string | null; context_length: number | null } | null;
+  used_storage_bytes: number | null;
+  file_count: number;
+  total_file_bytes: number;
+  files: { path: string; size: number | null }[];
+  gguf_variants: { path: string; size: number | null; label: string | null; shards: number }[];
+  readme_excerpt: string | null;
+  bytes_fetched: number;
+  requests: number;
 }
 
 export interface ScanSummary {
