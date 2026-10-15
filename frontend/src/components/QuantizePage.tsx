@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Tab } from "../App";
-import { api } from "../api";
+import { BROWSER_EDITION, api } from "../api";
 import { fmtBytes, fmtTime } from "../format";
 import type { Job, Plan, ScanResult, ToolDryRun, ToolsReport } from "../types";
 import { Callout, List, Spinner } from "./common";
@@ -16,7 +16,44 @@ interface Props {
   onHistoryChanged: () => void;
 }
 
-export default function QuantizePage({ scan, onError, onOpenScan, onHistoryChanged }: Props) {
+export default function QuantizePage(props: Props) {
+  return BROWSER_EDITION ? <LocalAppOnly scan={props.scan} onOpenScan={props.onOpenScan} /> : <QuantizeWorkflow {...props} />;
+}
+
+function LocalAppOnly({ scan, onOpenScan }: Pick<Props, "scan" | "onOpenScan">) {
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h2>Quantize / convert</h2>
+          <p>Quantization runs llama.cpp on your own machine, which a website cannot (and should not) do.</p>
+        </div>
+      </div>
+      <Callout kind="warn" title="Available in the local app.">
+        The hosted edition inspects models and estimates memory entirely in your browser. To quantize {scan.kind === "gguf" ? "this GGUF" : "or convert this model"}{" "}
+        with a dry-run plan, explicit confirmation and output validation, run Model Surgery locally:
+      </Callout>
+      <div className="card">
+        <pre className="argv mono" style={{ whiteSpace: "pre-wrap" }}>
+          {`git clone https://github.com/Yafai01/model-surgery
+cd model-surgery
+.\\scripts\\setup.ps1          # or ./scripts/setup.sh on Linux / Jetson
+.\\.venv\\Scripts\\model-surgery --llama-cpp-dir <folder with llama-quantize> serve --open`}
+        </pre>
+        <div className="row" style={{ marginTop: 12 }}>
+          <a className="btn primary" href="https://github.com/Yafai01/model-surgery#quick-start-windows-11" target="_blank" rel="noreferrer">
+            Setup guide on GitHub
+          </a>
+          <button className="btn" onClick={() => onOpenScan(scan.id, "memory")}>
+            See size estimates per precision →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QuantizeWorkflow({ scan, onError, onOpenScan, onHistoryChanged }: Props) {
   const operation = scan.kind === "gguf" ? "quantize" : scan.kind === "hf_safetensors" ? "convert" : null;
   const [tools, setTools] = useState<ToolsReport | null>(null);
   const [checking, setChecking] = useState(false);

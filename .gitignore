@@ -7,3 +7,8 @@ frontend/dist/
 *.gguf
 *.gguf.partial
 *.safetensors
+
+frontend/dist-browser/
+.vercel
+
+.vercel

@@ -93,6 +93,12 @@ export interface QuantizationSummary {
   notes: string[];
 }
 
+export interface FormatInfo {
+  name: string;
+  version: string | null;
+  details: Record<string, unknown>;
+}
+
 export interface ScanResult {
   id: string;
   scanned_at: string;
@@ -102,7 +108,7 @@ export interface ScanResult {
   path: string;
   files: SourceFile[];
   total_size_bytes: number;
-  format: { name: string; version: string | null; details: Record<string, unknown> };
+  format: FormatInfo;
   integrity: { valid: boolean; errors: string[]; warnings: string[] };
   hyperparameters: Fact[];
   quantization: QuantizationSummary;

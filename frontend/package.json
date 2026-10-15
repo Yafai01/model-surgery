@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:browser": "tsc -b && vite build --mode browser --outDir dist-browser",
+    "dev:browser": "vite --mode browser",
     "typecheck": "tsc -b --noEmit",
     "preview": "vite preview"
   },

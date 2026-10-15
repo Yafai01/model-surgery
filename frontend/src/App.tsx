@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api";
+import { BROWSER_EDITION, api } from "./api";
 import { Callout } from "./components/common";
 import ArchitecturePage from "./components/ArchitecturePage";
 import HistoryPage from "./components/HistoryPage";
@@ -145,9 +145,21 @@ export default function App() {
           </div>
         ))}
         <div className="sidebar-foot">
-          Local-only · read-only inspection
-          <br />
-          Model files are never executed.
+          {BROWSER_EDITION ? (
+            <>
+              Browser edition · files never leave your computer
+              <br />
+              <a href="https://github.com/Yafai01/model-surgery" target="_blank" rel="noreferrer">
+                GitHub · local app with quantization
+              </a>
+            </>
+          ) : (
+            <>
+              Local-only · read-only inspection
+              <br />
+              Model files are never executed.
+            </>
+          )}
         </div>
       </aside>
       <main className="main">

@@ -65,6 +65,17 @@ export default function ReportsPage({ scan, history, onError }: Props) {
     }
   };
 
+  const exportAs = async (format: "json" | "csv") => {
+    if (!scan) return;
+    try {
+      const text = await api.exportText(scan.id, format);
+      const stem = scan.name.replace(/[^A-Za-z0-9._-]+/g, "-").slice(0, 60) || "model";
+      download(format === "json" ? `${stem}.scan.json` : `${stem}.tensors.csv`, text, format === "json" ? "application/json" : "text/csv");
+    } catch (e) {
+      onError((e as Error).message);
+    }
+  };
+
   const copy = (text: string) => navigator.clipboard?.writeText(text).catch(() => onError("clipboard unavailable"));
 
   let section = "";
@@ -87,12 +98,12 @@ export default function ReportsPage({ scan, history, onError }: Props) {
         ) : (
           <>
             <div className="row">
-              <a className="btn" href={api.exportUrl(scan.id, "json")} download>
+              <button className="btn" onClick={() => exportAs("json")}>
                 ⤓ JSON (full scan)
-              </a>
-              <a className="btn" href={api.exportUrl(scan.id, "csv")} download>
+              </button>
+              <button className="btn" onClick={() => exportAs("csv")}>
                 ⤓ CSV (tensor table)
-              </a>
+              </button>
               <select value={device} onChange={(e) => setDevice(e.target.value)} aria-label="Device for report">
                 {DEVICES.map(([id, label]) => (
                   <option key={id} value={id}>

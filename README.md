@@ -6,6 +6,17 @@ Model Surgery opens GGUF files and Hugging Face safetensors directories, rebuild
 
 It reads headers only. Inspecting a model needs no PyTorch or CUDA, and tensor data is never loaded.
 
+**▶ Try it in your browser: [model-surgery.vercel.app](https://model-surgery.vercel.app).** The hosted *browser edition* parses the model in your tab with the File API, reading only the header bytes, so a multi-GB GGUF scans in well under a second. **Nothing is uploaded.** The site's Content-Security-Policy blocks connections to any other host, and scan history stays in your browser's IndexedDB. It covers inspection, the 2D/3D architecture view, the Memory Lab, exports and comparison. Quantization needs llama.cpp on your own machine, so use the local app below for that.
+
+| | Browser edition (Vercel) | Local app |
+|---|---|---|
+| Inspect GGUF / safetensors / HF folders | ✅ | ✅ |
+| Architecture 2D/3D, tensors, metadata | ✅ | ✅ |
+| Memory Lab, device profiles | ✅ | ✅ |
+| JSON / CSV / Markdown reports, compare | ✅ | ✅ |
+| History | this browser (IndexedDB) | SQLite |
+| Quantize / convert with llama.cpp | — | ✅ |
+
 | | |
 |---|---|
 | Backend | Python 3.11+, FastAPI, SQLite (stdlib), a pure-Python GGUF and safetensors header parser |
@@ -162,6 +173,12 @@ cd frontend; npm run dev                                  # Vite on :5173, proxi
 ```
 
 To run the optional tests against a real model, set `MODEL_SURGERY_TEST_GGUF=C:\path\to\model.gguf`.
+
+### Browser edition
+
+`frontend/src/engine/` is a TypeScript port of the Python engine (GGUF/safetensors/HF readers, architecture reconstruction, memory estimator, reports). `npm run build:browser` (Vite mode `browser`) swaps the HTTP API client for this in-page engine and writes `frontend/dist-browser/`, which is what `vercel.json` deploys. `npm run dev:browser` serves it locally.
+
+The port was checked against the Python engine on real GGUFs (including llama.cpp-produced Q4_0 and Q4_K_M files), on HF folders (sharded, GPTQ, multimodal), and on deliberately corrupt files. Scan results, integrity errors and all memory-estimate scenarios match field for field. The one known difference is that JavaScript cannot distinguish `10000.0` from `10000` in `config.json`.
 
 The test suite includes synthetic and deliberately corrupted GGUF and safetensors files (truncated, oversized counts, misaligned or overlapping offsets, unknown types, duplicate keys, path traversal), along with a fake `llama-quantize` that exercises success, tool failure, unreadable output, wrong output type, cancellation, concurrency limits, confirmation tokens and source-change detection.
 

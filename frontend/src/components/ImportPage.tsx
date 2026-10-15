@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { api } from "../api";
+import { type DragEvent, useCallback, useEffect, useRef, useState } from "react";
+import { BROWSER_EDITION, api } from "../api";
 import { fmtBytes, fmtCount, fmtTime } from "../format";
 import type { FsEntry, FsListing, FsRoot, ScanResult, ScanSummary } from "../types";
 import { Callout, Spinner } from "./common";
@@ -25,7 +25,174 @@ function crumbs(path: string): { label: string; path: string }[] {
   return out;
 }
 
-export default function ImportPage({ onScanned, onError, recent, onOpen }: Props) {
+export default function ImportPage(props: Props) {
+  return BROWSER_EDITION ? <BrowserImport {...props} /> : <LocalImport {...props} />;
+}
+
+function RecentScans({ recent, onOpen }: Pick<Props, "recent" | "onOpen">) {
+  return (
+    <div className="card">
+      <h3 style={{ marginBottom: 10 }}>Recent scans</h3>
+      {recent.length === 0 && <p className="dim small">Nothing scanned yet.</p>}
+      <div className="col">
+        {recent.slice(0, 8).map((r) => (
+          <button key={r.id} className="nav-item" onClick={() => onOpen(r.id)} style={{ flexDirection: "column", alignItems: "flex-start", gap: 0 }}>
+            <span style={{ color: "var(--text)", fontWeight: 500 }}>{r.name}</span>
+            <span className="small faint">
+              {r.quant_label ?? r.kind} · {fmtCount(r.n_params)} params · {fmtBytes(r.total_size_bytes)} · {fmtTime(r.scanned_at)}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---- browser edition: files are read locally with the File API; nothing is uploaded ----
+
+function withPath(f: File, path: string): File {
+  Object.defineProperty(f, "webkitRelativePath", { value: path, configurable: true });
+  return f;
+}
+
+async function filesFromEntry(entry: FileSystemEntry, prefix: string, depth = 0): Promise<File[]> {
+  if (entry.isFile) {
+    const f = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej));
+    return [withPath(f, prefix + f.name)];
+  }
+  if (!entry.isDirectory || depth > 2) return [];
+  const reader = (entry as FileSystemDirectoryEntry).createReader();
+  const out: File[] = [];
+  for (;;) {
+    const batch = await new Promise<FileSystemEntry[]>((res, rej) => reader.readEntries(res, rej));
+    if (!batch.length) break;
+    for (const e of batch) out.push(...(await filesFromEntry(e, `${prefix}${entry.name}/`, depth + 1)));
+  }
+  return out;
+}
+
+function BrowserImport({ onScanned, recent, onOpen }: Props) {
+  const [busy, setBusy] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [drag, setDrag] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const dirInput = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    dirInput.current?.setAttribute("webkitdirectory", "");
+  }, []);
+
+  const scan = async (files: File[]) => {
+    if (!files.length) return;
+    setBusy(true);
+    setScanError(null);
+    try {
+      onScanned(await api.scanFiles(files));
+    } catch (e) {
+      setScanError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onDrop = async (ev: DragEvent) => {
+    ev.preventDefault();
+    setDrag(false);
+    const items = [...ev.dataTransfer.items].map((i) => i.webkitGetAsEntry()).filter((e): e is FileSystemEntry => !!e);
+    const files = (await Promise.all(items.map((e) => filesFromEntry(e, "")))).flat();
+    scan(files.length ? files : [...ev.dataTransfer.files]);
+  };
+
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div>
+          <h2>Import a model</h2>
+          <p>Pick a GGUF file or a Hugging Face model folder. Everything runs in this tab: only the header bytes are read, and nothing is uploaded.</p>
+        </div>
+      </div>
+
+      <div
+        className="card"
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDrag(true);
+        }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={onDrop}
+        style={{ borderStyle: "dashed", borderWidth: 2, borderColor: drag ? "var(--accent)" : "var(--border-strong)", textAlign: "center", padding: "40px 20px" }}
+      >
+        <h3 style={{ marginBottom: 6 }}>{busy ? "Reading headers…" : "Drop a .gguf file or a model folder here"}</h3>
+        <p className="dim" style={{ marginTop: 0 }}>
+          Multi-GB files are fine — only the first few megabytes are read.
+        </p>
+        <div className="row" style={{ justifyContent: "center", marginTop: 14 }}>
+          <button className="btn primary" disabled={busy} onClick={() => fileInput.current?.click()}>
+            {busy ? <Spinner /> : "Choose GGUF / safetensors file…"}
+          </button>
+          <button className="btn" disabled={busy} onClick={() => dirInput.current?.click()}>
+            Choose Hugging Face folder…
+          </button>
+        </div>
+        <input
+          ref={fileInput}
+          type="file"
+          multiple
+          accept=".gguf,.safetensors"
+          hidden
+          onChange={(e) => {
+            scan([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
+        <input
+          ref={dirInput}
+          type="file"
+          multiple
+          hidden
+          onChange={(e) => {
+            scan([...(e.target.files ?? [])]);
+            e.target.value = "";
+          }}
+        />
+        <p className="small faint" style={{ marginTop: 14 }}>
+          Your browser may ask to “upload” the folder — that is its standard wording for granting this page read access. No file leaves your computer.
+        </p>
+        {scanError && (
+          <div style={{ marginTop: 12, textAlign: "left" }}>
+            <Callout kind="bad" title="Could not scan:">
+              {scanError}
+            </Callout>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-2">
+        <div className="card">
+          <h3 style={{ marginBottom: 10 }}>How this works</h3>
+          <ul className="small dim" style={{ margin: 0, paddingLeft: 18, lineHeight: 1.8 }}>
+            <li>GGUF and safetensors headers are parsed in JavaScript with strict bounds checks.</li>
+            <li>Tensor data is never read, so inspecting a 70B model is as fast as a 0.5B one.</li>
+            <li>Pickle files (.bin, .pt, .ckpt) are never opened.</li>
+            <li>Scan history stays in this browser (IndexedDB).</li>
+            <li>
+              Quantization needs llama.cpp on your machine — use the{" "}
+              <a href="https://github.com/Yafai01/model-surgery" target="_blank" rel="noreferrer">
+                local app
+              </a>
+              .
+            </li>
+          </ul>
+        </div>
+        <RecentScans recent={recent} onOpen={onOpen} />
+      </div>
+    </div>
+  );
+}
+
+// ---- local edition: server-side path entry and file browser ----
+
+function LocalImport({ onScanned, onError, recent, onOpen }: Props) {
   const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [roots, setRoots] = useState<FsRoot[]>([]);
@@ -226,20 +393,7 @@ export default function ImportPage({ onScanned, onError, recent, onOpen }: Props
               </tbody>
             </table>
           </div>
-          <div className="card">
-            <h3 style={{ marginBottom: 10 }}>Recent scans</h3>
-            {recent.length === 0 && <p className="dim small">Nothing scanned yet.</p>}
-            <div className="col">
-              {recent.slice(0, 8).map((r) => (
-                <button key={r.id} className="nav-item" onClick={() => onOpen(r.id)} style={{ flexDirection: "column", alignItems: "flex-start", gap: 0 }}>
-                  <span style={{ color: "var(--text)", fontWeight: 500 }}>{r.name}</span>
-                  <span className="small faint">
-                    {r.quant_label ?? r.kind} · {fmtCount(r.n_params)} params · {fmtBytes(r.total_size_bytes)} · {fmtTime(r.scanned_at)}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
+          <RecentScans recent={recent} onOpen={onOpen} />
         </div>
       </div>
     </div>

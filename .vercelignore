@@ -1,0 +1,9 @@
+.venv
+backend
+scripts
+frontend/node_modules
+frontend/dist
+frontend/dist-browser
+**/__pycache__
+*.gguf
+*.safetensors
