@@ -22,8 +22,9 @@ _COMPONENT_RULES: list[tuple[str, re.Pattern[str]]] = [
     # Order matters: the first match wins.
     ("norm", re.compile(r"(norm|layernorm|(^|[._])ln(_?\d+|_f|_attn|_mlp)?([._]|$))")),
     ("router", re.compile(r"(ffn_gate_inp|router|block_sparse_moe\.gate\.|mlp\.gate\.(weight|bias)$|(^|\.)gate\.(weight|bias)$|exp_probs)")),
-    ("experts", re.compile(r"(_exps\b|_exps\.|experts\.|\.experts$)")),
-    ("ssm", re.compile(r"(ssm_|mixer\.|time_mix|channel_mix|conv1d|\bx_proj|dt_proj|A_log)")),
+    ("experts", re.compile(r"(_exps\b|_exps\.|(?<!shared_)experts\.|\.experts$)")),
+    # Attention/FFN projections inside a generic "mixer." block (NemotronH) are not SSM tensors.
+    ("ssm", re.compile(r"(ssm_|mamba\.|mixer\.(?!(q_proj|k_proj|v_proj|o_proj|up_proj|down_proj|gate_proj)\b)|time_mix|channel_mix|conv1d|\bx_proj|dt_proj|a_log)")),
     ("attention", re.compile(r"(attn|attention|self_attn|q_proj|k_proj|v_proj|o_proj|\bquery\b|\bkey\b|\bvalue\b|qkv|\bwq\b|\bwk\b|\bwv\b|\bwo\b)")),
     ("ffn", re.compile(r"(mlp|ffn|feed_forward|gate_proj|up_proj|down_proj|\bfc\d\b|c_fc|\bw[123]\b|dense_h_to_4h|dense_4h_to_h|shexp|shared_expert)")),
 ]

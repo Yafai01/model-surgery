@@ -8,10 +8,11 @@ interface Props {
   history: ScanSummary[];
   onOpen: (id: string) => void;
   onChanged: () => void;
+  onDeleted?: (id: string) => void;
   onError: (m: string) => void;
 }
 
-export default function HistoryPage({ history, onOpen, onChanged, onError }: Props) {
+export default function HistoryPage({ history, onOpen, onChanged, onDeleted, onError }: Props) {
   const [q, setQ] = useState("");
   const rows = history.filter((h) => !q || `${h.name} ${h.path} ${h.quant_label}`.toLowerCase().includes(q.toLowerCase()));
 
@@ -19,6 +20,7 @@ export default function HistoryPage({ history, onOpen, onChanged, onError }: Pro
     if (!window.confirm("Remove this scan from history? (The model file itself is not touched.)")) return;
     try {
       await api.deleteScan(id);
+      onDeleted?.(id); // the open model may be the one that was removed
       onChanged();
     } catch (e) {
       onError((e as Error).message);
@@ -32,7 +34,7 @@ export default function HistoryPage({ history, onOpen, onChanged, onError }: Pro
           <h2>Scan history</h2>
           <p>Stored locally in SQLite. Removing an entry never touches model files.</p>
         </div>
-        <input type="text" placeholder="Filter…" value={q} onChange={(e) => setQ(e.target.value)} />
+        <input type="search" placeholder="Filter…" aria-label="Filter history" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
       {history.length === 0 ? (
         <Empty title="No scans yet">Import a model to start building a history.</Empty>

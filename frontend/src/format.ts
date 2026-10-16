@@ -45,16 +45,17 @@ export function shapeStr(shape: number[]): string {
 }
 
 // Component palette shared by the 2D and 3D architecture views.
+// Mid-tone hues that keep contrast on both light and dark surfaces.
 export const COMPONENT_COLORS: Record<string, string> = {
-  embedding: "#a78bfa",
-  attention: "#38bdf8",
-  ffn: "#2dd4bf",
-  experts: "#34d399",
-  router: "#fbbf24",
-  norm: "#94a3b8",
-  ssm: "#f472b6",
-  output: "#fb923c",
-  other: "#64748b",
+  embedding: "#8b5cf6",
+  attention: "#0a84ff",
+  ffn: "#14b8a6",
+  experts: "#22c55e",
+  router: "#f59e0b",
+  norm: "#9ca3af",
+  ssm: "#ec4899",
+  output: "#f97316",
+  other: "#6b7280",
 };
 
 export function componentColor(c: string): string {

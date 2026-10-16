@@ -289,7 +289,10 @@ function fit(scan: ScanResult, p: DeviceProfile, comps: MemoryComponent[], sel: 
       const budget = usable - fixed - outBytes;
       gpuLayers = Math.max(0, Math.min(totalLayers, perLayer ? Math.floor(budget / perLayer) : 0));
       const hostNeed = total - gpuLayers * perLayer - fixed;
-      if (gpuLayers > 0 && (p.host_ram_bytes === null || hostNeed <= p.host_ram_bytes)) {
+      if (gpuLayers >= totalLayers) {
+        verdict = "tight";
+        notes.push(`all ${totalLayers} layers fit in VRAM only because llama.cpp keeps the token-embedding table in host RAM; little headroom`);
+      } else if (gpuLayers > 0 && (p.host_ram_bytes === null || hostNeed <= p.host_ram_bytes)) {
         verdict = "partial_offload";
         notes.push(`about ${gpuLayers} of ${totalLayers} layers fit in VRAM; the rest run from system RAM (much slower)`);
       } else notes.push("model does not fit in VRAM and the remainder exceeds the assumed host RAM");

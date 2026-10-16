@@ -22,6 +22,8 @@ export interface HubOptions {
   file?: string | null;
   token?: string | null;
   onProgress?: (p: { requests: number; bytes: number; stage: string }) => void;
+  /** Aborts every in-flight and future request of this scan. */
+  signal?: AbortSignal;
 }
 
 /** Accepts https://huggingface.co/owner/name[/tree|blob|resolve/rev[/path]], hf.co/..., or owner/name. */
@@ -61,6 +63,7 @@ class HubClient {
   constructor(
     private token: string | null,
     private onProgress?: HubOptions["onProgress"],
+    private signal?: AbortSignal,
   ) {}
 
   get hasToken() {
@@ -77,12 +80,16 @@ class HubClient {
     const headers = new Headers(init.headers);
     // The token only ever goes to huggingface.co itself (redirects to the CDN drop it, per the Fetch spec).
     if (this.token && new URL(url).origin === HUB) headers.set("Authorization", `Bearer ${this.token}`);
+    if (this.signal?.aborted) throw new ScanError("cancelled");
     this.requests++;
     this.progress();
+    const signals = [init.signal, this.signal].filter((x): x is AbortSignal => !!x);
+    const signal = signals.length > 1 && "any" in AbortSignal ? AbortSignal.any(signals) : signals[signals.length - 1];
     let r: Response;
     try {
-      r = await fetch(url, { ...init, headers, credentials: "omit", referrerPolicy: "no-referrer" });
+      r = await fetch(url, { ...init, signal, headers, credentials: "omit", referrerPolicy: "no-referrer" });
     } catch {
+      if (this.signal?.aborted) throw new ScanError("cancelled");
       throw new ScanError("could not reach huggingface.co (offline, blocked by a firewall, or a browser extension?)");
     }
     if (r.status === 401 || r.status === 403) {
@@ -249,7 +256,7 @@ async function readmeExcerpt(client: HubClient, repo: string, sha: string, sibs:
 export async function scanHub(input: string, opts: HubOptions = {}): Promise<ScanResult> {
   const ref = parseHubRef(input);
   const target = opts.file ?? ref.file;
-  const client = new HubClient(opts.token?.trim() || null, opts.onProgress);
+  const client = new HubClient(opts.token?.trim() || null, opts.onProgress, opts.signal);
 
   client.progress("reading repository metadata");
   const infoUrl = `${HUB}/api/models/${ref.repo}${ref.revision !== "main" ? `/revision/${encodeURIComponent(ref.revision)}` : ""}?blobs=true`;

@@ -251,3 +251,19 @@ def test_interrupted_jobs_marked_on_restart(env):
     env.history.save_job("abc", "2026-01-01T00:00:00", "running", {"id": "abc", "status": "running"})
     h2 = History(env.settings.db_path)
     assert h2.get_job("abc")["status"] == "interrupted"
+
+
+def test_unexpected_worker_error_fails_job_and_frees_slot(env, monkeypatch):
+    # Audit B1: e.g. Windows refusing os.rename while antivirus holds the new file.
+    def boom(*a, **kw):
+        raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+
+    monkeypatch.setattr(jobs_mod.os, "rename", boom)
+    plan, job = run(env)
+    assert job.status == "failed" and "PermissionError" in job.error
+    assert not Path(plan.partial_path).exists()
+    monkeypatch.undo()
+    # the job slot is free again: execute() is not refused with "another job is already running"
+    plan2 = env.mgr.create_plan(PlanRequest(scan_id=env.scan.id, operation="quantize", target="Q8_0"), env.scan)
+    job2 = env.mgr.execute(ExecuteRequest(plan_id=plan2.plan_id, confirm=True, confirm_token=plan2.confirm_token))
+    assert job2.status in ("running", "validating", "succeeded", "failed")

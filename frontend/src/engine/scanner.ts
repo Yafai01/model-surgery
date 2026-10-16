@@ -59,6 +59,15 @@ function scalarize(value: unknown, key: string, notes: string[]): unknown {
   return value;
 }
 
+/** Python's type(v).__name__ for GGUF values, so notes match the Python engine word for word. */
+function pyTypeName(v: unknown): string {
+  if (Array.isArray(v)) return "list";
+  if (typeof v === "string") return "str";
+  if (typeof v === "boolean") return "bool";
+  if (typeof v === "number") return Number.isInteger(v) ? "int" : "float";
+  return typeof v;
+}
+
 function factsFromGGUF(g: GGUFFile, facts: Facts, notes: string[]): string | null {
   const arch = ggufGet(g, "general.architecture");
   if (typeof arch !== "string") {
@@ -68,7 +77,11 @@ function factsFromGGUF(g: GGUFFile, facts: Facts, notes: string[]): string | nul
   facts.add("architecture", "Architecture", arch, "verified", "general.architecture");
   const kv = (label: string, key: string, sfx: string) => {
     const full = `${arch}.${sfx}`;
-    if (g.metadata.has(full)) facts.add(key, label, scalarize(ggufGet(g, full), full, notes), "verified", full);
+    if (!g.metadata.has(full)) return;
+    const v = scalarize(ggufGet(g, full), full, notes);
+    // Hyperparameters feed arithmetic in the estimator: only real numbers are accepted (not bool/str).
+    if (typeof v === "number" && Number.isFinite(v)) facts.add(key, label, v, "verified", full);
+    else notes.push(`${full} has a non-numeric value (${pyTypeName(ggufGet(g, full))}); ignored`);
   };
   kv("Layers", "n_layers", "block_count");
   kv("Hidden size", "hidden_size", "embedding_length");
@@ -137,6 +150,12 @@ function factsFromHF(config: Record<string, unknown>, facts: Facts, notes: strin
       }
     }
   }
+  // DeepSeek-V2/V3 (MLA): per-head K = nope + rope dims, V has its own width.
+  const [nope, rope, vdim] = [lm.qk_nope_head_dim, lm.qk_rope_head_dim, lm.v_head_dim];
+  if (Number.isInteger(nope) && Number.isInteger(rope) && (nope as number) > 0 && (rope as number) > 0) {
+    facts.add("head_dim", "Head dim (K)", (nope as number) + (rope as number), "derived", `${src}:qk_nope_head_dim + qk_rope_head_dim`, true);
+    if (Number.isInteger(vdim) && (vdim as number) > 0) facts.add("head_dim_v", "Head dim (V)", vdim, "verified", `${src}:v_head_dim`, true);
+  }
   if (facts.get("n_kv_heads") === null && lm.multi_query === true) facts.add("n_kv_heads", "KV heads", 1, "verified", `${src}:multi_query`);
   if (typeof lm.tie_word_embeddings === "boolean") facts.add("tied_embeddings", "Tied embeddings", lm.tie_word_embeddings, "verified", `${src}:tie_word_embeddings`);
   const dt = lm.torch_dtype ?? lm.dtype;
@@ -177,9 +196,11 @@ function completeFacts(facts: Facts, tensors: TensorRecord[], notes: string[], p
   }
 
   const stackCounts = new Map<string, number>();
-  for (const t of tensors) if (t.stack !== null) stackCounts.set(t.stack, (stackCounts.get(t.stack) ?? 0) + 1);
+  // Primary stack = most weight bytes (same rule as buildArchitecture), so a vision tower with many small tensors
+  // never supplies the language model layer count.
+  for (const t of tensors) if (t.stack !== null) stackCounts.set(t.stack, (stackCounts.get(t.stack) ?? 0) + (t.n_bytes ?? t.n_elements));
   if (stackCounts.size) {
-    // most common stack; ties resolved by first occurrence, as Counter.most_common does
+    // ties resolved by first occurrence, as Counter.most_common does
     let primary = "";
     let best = -1;
     for (const [s, c] of stackCounts) if (c > best) [primary, best] = [s, c];
@@ -295,7 +316,7 @@ async function scanGGUF(file: FileLike, all: FileLike[]): Promise<Partial> {
   const errors = [...g0.errors];
   const warnings = [...g0.warnings];
   const notes: string[] = [];
-  const parsed: { file: FileLike; g: GGUFFile }[] = [{ file, g: g0 }];
+  let parsed: { file: FileLike; g: GGUFFile }[] = [{ file, g: g0 }];
 
   const count = ggufGet(g0, "split.count");
   if (isInt(count) && count > 1) {
@@ -304,8 +325,14 @@ async function scanGGUF(file: FileLike, all: FileLike[]): Promise<Partial> {
     else {
       if (Number(m[2]) !== 1) errors.push("this is not the first shard of a split GGUF; select the -00001-of-NNNNN file");
       const byName = new Map(all.map((f) => [f.name, f]));
-      for (let i = 2; i <= count; i++) {
+      // Same as the Python engine: walk shards 1..N in order and reuse the already-parsed selected file.
+      parsed = [];
+      for (let i = 1; i <= count; i++) {
         const nm = `${m[1]}-${String(i).padStart(5, "0")}-of-${String(count).padStart(5, "0")}.gguf`;
+        if (nm === file.name) {
+          parsed.push({ file, g: g0 });
+          continue;
+        }
         const sf = byName.get(nm);
         if (!sf) {
           errors.push(`missing split shard ${nm} (select all shard files together)`);
@@ -317,7 +344,8 @@ async function scanGGUF(file: FileLike, all: FileLike[]): Promise<Partial> {
           warnings.push(...gs.warnings.map((x) => `${nm}: ${x}`));
           parsed.push({ file: sf, g: gs });
         } catch (e) {
-          errors.push(`${nm}: ${(e as Error).message}`);
+          if (!(e instanceof FormatError)) throw e; // I/O errors abort the scan, as in the Python engine
+          errors.push(`${nm}: ${e.message}`);
         }
       }
     }

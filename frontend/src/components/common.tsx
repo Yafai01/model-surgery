@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import type { Provenance } from "../types";
 
 const PROV_TITLE: Record<Provenance, string> = {
@@ -36,13 +36,27 @@ export function Stat({ label, value, sub }: { label: string; value: ReactNode; s
   );
 }
 
+/** Keyboard support for a non-button element that acts on click (rows that contain other buttons). */
+export function activate(fn: () => void) {
+  return {
+    tabIndex: 0,
+    onKeyDown: (e: KeyboardEvent) => {
+      if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+        e.preventDefault();
+        fn();
+      }
+    },
+  };
+}
+
 export function Spinner() {
-  return <span className="spinner" aria-label="loading" />;
+  return <span className="spinner" role="status" aria-label="loading" />;
 }
 
 export function Callout({ kind = "info", title, children }: { kind?: "info" | "warn" | "bad" | "ok"; title?: string; children: ReactNode }) {
+  // Errors are announced to screen readers; other callouts are static content.
   return (
-    <div className={`callout ${kind === "info" ? "" : kind}`}>
+    <div className={`callout ${kind === "info" ? "" : kind}`} role={kind === "bad" ? "alert" : undefined}>
       {title && <strong>{title} </strong>}
       {children}
     </div>

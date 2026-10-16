@@ -3,13 +3,19 @@ import type {
   DeviceProfile,
   FsListing,
   FsRoot,
+  GenerateRequest,
+  GenerationEvent,
   Job,
+  Measurement,
   MemoryEstimate,
   MemoryRequest,
   Plan,
   PlanRequest,
   ScanResult,
+  RuntimeStartRequest,
+  RuntimeStatus,
   ScanSummary,
+  SystemInfo,
   ToolDryRun,
   ToolsReport,
 } from "./types";
@@ -37,6 +43,7 @@ export interface HubScanOptions {
   file?: string | null;
   token?: string | null;
   onProgress?: (p: { requests: number; bytes: number; stage: string }) => void;
+  signal?: AbortSignal;
 }
 
 /** Read a model from the Hugging Face Hub in this page (header bytes only). Shared by both editions. */
@@ -71,6 +78,34 @@ export interface Api {
   jobs(): Promise<Job[]>;
   job(id: string): Promise<Job>;
   cancel(id: string): Promise<Job>;
+  system(): Promise<SystemInfo | null>;
+  runtime(): Promise<RuntimeStatus>;
+  runtimeStart(req: RuntimeStartRequest): Promise<RuntimeStatus>;
+  runtimeStop(): Promise<RuntimeStatus>;
+  runtimeCancel(): Promise<{ cancelled: boolean }>;
+  runtimeMeasurements(): Promise<Measurement[]>;
+  tokenize(text: string, addSpecial: boolean): Promise<{ n_tokens: number; tokens: { id: number; piece: string }[]; truncated: boolean }>;
+  /** Streams generation events; resolves when the stream ends. Abort the signal to stop generating. */
+  generate(req: GenerateRequest, onEvent: (e: GenerationEvent) => void, signal: AbortSignal): Promise<void>;
+}
+
+/** Reads an application/x-ndjson response line by line. */
+async function readNdjson(r: Response, onLine: (v: unknown) => void): Promise<void> {
+  const reader = r.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) onLine(JSON.parse(line));
+    }
+  }
+  if (buf.trim()) onLine(JSON.parse(buf));
 }
 
 // ---------------------------------------------------------------- local backend
@@ -120,13 +155,44 @@ const httpApi: Api = {
   memory: (id, req) => request<MemoryEstimate>("POST", `/api/scans/${q(id)}/memory`, req),
   compare: (a, b, ctx, device) => request<Comparison>("GET", `/api/compare?a=${q(a)}&b=${q(b)}&context_length=${ctx}&device_id=${q(device)}`),
   compareMd: (a, b, ctx, device) => request<string>("GET", `/api/compare.md?a=${q(a)}&b=${q(b)}&context_length=${ctx}&device_id=${q(device)}`),
-  tools: (refresh = false) => request<ToolsReport>("GET", `/api/tools${refresh ? "?refresh=true" : ""}`),
+  tools: (refresh = false) => (refresh ? request<ToolsReport>("POST", "/api/tools/refresh") : request<ToolsReport>("GET", "/api/tools")),
   plan: (req) => request<Plan>("POST", "/api/quantize/plan", req),
   toolDryRun: (planId) => request<ToolDryRun>("POST", `/api/quantize/plan/${q(planId)}/tool-dry-run`),
   execute: (planId, token) => request<Job>("POST", "/api/quantize/jobs", { plan_id: planId, confirm: true, confirm_token: token }),
   jobs: () => request<Job[]>("GET", "/api/quantize/jobs"),
   job: (id) => request<Job>("GET", `/api/quantize/jobs/${q(id)}`),
   cancel: (id) => request<Job>("POST", `/api/quantize/jobs/${q(id)}/cancel`),
+  system: () => request<SystemInfo>("GET", "/api/system"),
+  runtime: () => request<RuntimeStatus>("GET", "/api/runtime"),
+  runtimeStart: (req) => request<RuntimeStatus>("POST", "/api/runtime/start", req),
+  runtimeStop: () => request<RuntimeStatus>("POST", "/api/runtime/stop"),
+  runtimeCancel: () => request<{ cancelled: boolean }>("POST", "/api/runtime/cancel"),
+  runtimeMeasurements: () => request<Measurement[]>("GET", "/api/runtime/measurements"),
+  tokenize: (text, addSpecial) => request("POST", "/api/runtime/tokenize", { text, add_special: addSpecial }),
+  async generate(req, onEvent, signal) {
+    let r: Response;
+    try {
+      r = await fetch("/api/runtime/generate", { method: "POST", headers: WRITE_HEADERS, body: JSON.stringify(req), signal });
+    } catch (e) {
+      if (signal.aborted) return;
+      throw e;
+    }
+    if (!r.ok) {
+      let msg = `${r.status} ${r.statusText}`;
+      try {
+        const j = await r.json();
+        if (j?.detail) msg = typeof j.detail === "string" ? j.detail : j.detail.map((d: { msg: string }) => d.msg).join("; ");
+      } catch {
+        /* non-JSON */
+      }
+      throw new ApiError(msg, r.status);
+    }
+    try {
+      await readNdjson(r, (v) => onEvent(v as GenerationEvent));
+    } catch (e) {
+      if (!signal.aborted) throw e; // aborting the fetch is how the user stops generation
+    }
+  },
 };
 
 // ---------------------------------------------------------------- in-browser engine
@@ -153,6 +219,15 @@ async function must(id: string): Promise<ScanResult> {
 const memReq = (ctx: number, device: string): MemoryRequest => ({
   weight_format: "current", context_length: ctx, batch_size: 1, kv_cache_type: "f16", flash_attention: true, n_ubatch: 512, device_id: device, custom_device: null,
 });
+
+const BROWSER_RUNTIME: RuntimeStatus = {
+  state: "unavailable",
+  tool: { available: false, path: null, version: null, detail: "the browser edition has no model runtime; run the local app with llama.cpp to generate text" },
+  scan_id: null, model_name: null, context_length: null, n_ctx_runtime: null, n_gpu_layers_requested: null, gpu_layers_offloaded: null, total_layers: null,
+  pid: null, started_at: null, load_seconds: null, allocations: [], process_rss_bytes: null, generating: false, error: null, log_tail: [],
+  capabilities: { token_stream: false, token_ids: false, top_k_logprobs: false, runtime_timings: false, runtime_allocations: false, layer_trace: false, attention_maps: false, activations: false },
+  trace_note: "No runtime is available in the browser edition. GGUF and safetensors files cannot be executed in this page.",
+};
 
 const browserApi: Api = {
   roots: notInBrowser,
@@ -207,6 +282,14 @@ const browserApi: Api = {
   jobs: notInBrowser,
   job: notInBrowser,
   cancel: notInBrowser,
+  system: async () => null,
+  runtime: async () => BROWSER_RUNTIME,
+  runtimeStart: notInBrowser,
+  runtimeStop: async () => BROWSER_RUNTIME,
+  runtimeCancel: async () => ({ cancelled: false }),
+  runtimeMeasurements: async () => [],
+  tokenize: notInBrowser,
+  generate: notInBrowser,
 };
 
 export const api: Api = BROWSER_EDITION ? browserApi : httpApi;

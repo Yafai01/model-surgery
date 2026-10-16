@@ -23,6 +23,7 @@ from .config import Settings
 IS_WINDOWS = sys.platform == "win32"
 EXE_SUFFIX = ".exe" if IS_WINDOWS else ""
 QUANTIZE_NAME = "llama-quantize"
+SERVER_NAME = "llama-server"
 VERSION_NAMES = ("llama-cli", "llama-server")
 CONVERT_SCRIPT_NAME = "convert_hf_to_gguf.py"
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -57,9 +58,17 @@ class ConvertTool(BaseModel):
     detail: str | None = None
 
 
+class ServerTool(BaseModel):
+    available: bool
+    path: str | None = None
+    version: str | None = None
+    detail: str | None = None
+
+
 class ToolsReport(BaseModel):
     quantize: QuantizeTool
     convert: ConvertTool
+    server: ServerTool = Field(default_factory=lambda: ServerTool(available=False, detail="not checked"))
     checked_at: float
     configuration_help: list[str]
 
@@ -156,6 +165,34 @@ def detect_convert(settings: Settings) -> ConvertTool:
     return ConvertTool(available=True, script=str(script), python=str(py), outtypes=outtypes, supported_architectures=archs or None)
 
 
+def _detect_server_uncached(settings: Settings) -> ServerTool:
+    exe = _exe(settings.llama_cpp_bin_dir, SERVER_NAME)
+    if exe is None:
+        where = f"in {settings.llama_cpp_bin_dir} or on PATH" if settings.llama_cpp_bin_dir else "on PATH"
+        return ServerTool(available=False, detail=f"{SERVER_NAME}{EXE_SUFFIX} not found {where}")
+    if exe.name.lower() != (SERVER_NAME + EXE_SUFFIX).lower():
+        return ServerTool(available=False, detail=f"unexpected executable name {exe.name}")
+    code, text = run_fixed([str(exe), "--version"], timeout=20)
+    m = _VERSION_LINE.search(text)
+    if code != 0 or not m:
+        return ServerTool(available=False, path=str(exe), detail=f"'{SERVER_NAME} --version' failed (exit {code}): {text[-300:]}")
+    return ServerTool(available=True, path=str(exe), version=f"b{m.group(1)} ({m.group(2)})")
+
+
+_server_cache: tuple[float, ServerTool] | None = None
+_server_lock = threading.Lock()
+
+
+def detect_server(settings: Settings, refresh: bool = False, ttl: float = 300.0) -> ServerTool:
+    global _server_cache
+    with _server_lock:
+        if _server_cache and not refresh and time.time() - _server_cache[0] < ttl:
+            return _server_cache[1]
+        tool = _detect_server_uncached(settings)
+        _server_cache = (time.time(), tool)
+        return tool
+
+
 _cache: tuple[float, ToolsReport] | None = None
 _lock = threading.Lock()
 
@@ -168,10 +205,11 @@ def detect_tools(settings: Settings, refresh: bool = False, ttl: float = 300.0) 
         report = ToolsReport(
             quantize=detect_quantize(settings),
             convert=detect_convert(settings),
+            server=detect_server(settings, refresh),
             checked_at=time.time(),
             configuration_help=[
                 "Tool locations are configured on the server only (never from the browser):",
-                "  MODEL_SURGERY_LLAMA_CPP_DIR   = folder containing llama-quantize",
+                "  MODEL_SURGERY_LLAMA_CPP_DIR   = folder containing llama-quantize and llama-server",
                 "  MODEL_SURGERY_CONVERT_SCRIPT  = path to llama.cpp/convert_hf_to_gguf.py",
                 "  MODEL_SURGERY_CONVERT_PYTHON  = Python with the convert requirements installed",
                 f"or the same keys (llama_cpp_bin_dir, convert_script, convert_python) in {settings.data_dir / 'config.json'}",
@@ -182,6 +220,8 @@ def detect_tools(settings: Settings, refresh: bool = False, ttl: float = 300.0) 
 
 
 def reset_cache() -> None:
-    global _cache
+    global _cache, _server_cache
     with _lock:
         _cache = None
+    with _server_lock:
+        _server_cache = None

@@ -44,7 +44,7 @@ def test_scan_history_export_roundtrip(client, tmp_path):
     assert [s["id"] for s in client.get("/api/scans").json()] == [sid]
     assert client.get(f"/api/scans/{sid}").json()["name"] == "tiny-llama"
     j = client.get(f"/api/scans/{sid}/export?format=json")
-    assert j.headers["content-disposition"].endswith('.scan.json"') and j.json()["id"] == sid
+    assert 'filename="tiny-llama.scan.json"' in j.headers["content-disposition"] and j.json()["id"] == sid
     csv = client.get(f"/api/scans/{sid}/export?format=csv").text
     assert csv.splitlines()[0].startswith("name,shape") and "blk.0.attn_q.weight" in csv
     md = client.get(f"/api/scans/{sid}/export?format=md").text
@@ -120,7 +120,7 @@ def test_fs_listing_respects_allowed_roots(tmp_path):
 
 def test_tools_endpoint_never_takes_paths(client):
     r = client.get("/api/tools").json()
-    assert set(r) == {"quantize", "convert", "checked_at", "configuration_help"}
+    assert set(r) == {"quantize", "convert", "server", "checked_at", "configuration_help"}
     # The OpenAPI schema must not expose any field that names an executable or command.
     schema = client.get("/api/openapi.json").json()
     body_fields = set()
@@ -153,8 +153,10 @@ def test_import_remote_scan(client, tmp_path):
     assert client.post("/api/scans/import", json=remote).status_code == 403  # CSRF header required
     r = client.post("/api/scans/import", json=remote, headers=H)
     assert r.status_code == 200 and r.json()["hub"]["repo"] == "owner/model"
-    assert client.get("/api/scans/remote1").json()["path"].startswith("hf://")
-    m = client.post("/api/scans/remote1/memory", json={"device_id": "jetson-orin-nano-8gb"}, headers=H)
+    rid = r.json()["id"]
+    assert rid != "remote1"  # the server assigns ids
+    assert client.get(f"/api/scans/{rid}").json()["path"].startswith("hf://")
+    m = client.post(f"/api/scans/{rid}/memory", json={"device_id": "jetson-orin-nano-8gb"}, headers=H)
     assert m.status_code == 200
 
 
@@ -172,6 +174,6 @@ def test_remote_scans_cannot_be_quantized(client, tmp_path):
     local = client.post("/api/scan", json={"path": str(llama_like_gguf(tmp_path / "m.gguf"))}, headers=H).json()
     remote = _as_remote(local)
     remote["id"] = "remote2"
-    client.post("/api/scans/import", json=remote, headers=H)
-    r = client.post("/api/quantize/plan", json={"scan_id": "remote2", "operation": "quantize", "target": "Q4_0"}, headers=H)
+    rid = client.post("/api/scans/import", json=remote, headers=H).json()["id"]
+    r = client.post("/api/quantize/plan", json={"scan_id": rid, "operation": "quantize", "target": "Q4_0"}, headers=H)
     assert r.status_code == 403 and "Hugging Face Hub" in r.json()["detail"]

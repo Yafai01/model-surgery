@@ -267,7 +267,15 @@ export interface QuantType {
   description: string;
 }
 
+export interface ServerTool {
+  available: boolean;
+  path: string | null;
+  version: string | null;
+  detail: string | null;
+}
+
 export interface ToolsReport {
+  server?: ServerTool;
   quantize: {
     available: boolean;
     path: string | null;
@@ -379,4 +387,110 @@ export interface Comparison {
   tensors_dtype_changed: number;
   dtype_changes: { from: string; to: string; count: number }[];
   note: string;
+}
+
+// ---- local inference (llama-server) -------------------------------------------
+
+export interface RuntimeAllocation {
+  kind: string; // model | KV | output | compute | RS
+  device: string;
+  bytes: number;
+  line: string;
+}
+
+export interface RuntimeStatus {
+  state: "unavailable" | "stopped" | "starting" | "ready" | "failed";
+  tool: ServerTool;
+  scan_id: string | null;
+  model_name: string | null;
+  context_length: number | null;
+  n_ctx_runtime: number | null;
+  n_gpu_layers_requested: number | null;
+  gpu_layers_offloaded: number | null;
+  total_layers: number | null;
+  pid: number | null;
+  started_at: string | null;
+  load_seconds: number | null;
+  allocations: RuntimeAllocation[];
+  process_rss_bytes: number | null;
+  generating: boolean;
+  error: string | null;
+  log_tail: string[];
+  capabilities: Record<string, boolean>;
+  trace_note: string;
+}
+
+export interface RuntimeStartRequest {
+  scan_id: string;
+  context_length: number;
+  n_gpu_layers: number | null;
+  threads: number | null;
+  allow_memory_risk: boolean;
+}
+
+export interface GenerateRequest {
+  prompt: string;
+  chat: boolean;
+  system: string | null;
+  n_predict: number;
+  temperature: number;
+  top_k: number;
+  top_p: number;
+  seed: number | null;
+  n_probs: number;
+}
+
+export interface TokenProb {
+  id: number;
+  token: string;
+  logprob: number;
+  top: { id: number; token: string; logprob: number }[];
+}
+
+export type GenerationEvent =
+  | { type: "notice"; message: string }
+  | { type: "prompt"; formatted: string; chat_template_applied: boolean; n_tokens: number; tokens: { id: number; piece: string | null }[] }
+  | { type: "token"; content: string; ids: number[]; probs: TokenProb[]; t_ms: number }
+  | {
+      type: "done";
+      stop_type: string | null;
+      truncated: boolean;
+      tokens_predicted: number | null;
+      tokens_evaluated: number | null;
+      tokens_cached: number | null;
+      timings: Record<string, number | null>;
+      wall: { first_token_ms: number | null; total_ms: number };
+      sampling: Record<string, unknown>;
+    }
+  | { type: "cancelled"; wall: { first_token_ms: number | null; total_ms: number } }
+  | { type: "error"; message: string };
+
+export interface Measurement {
+  at: string;
+  scan_id: string | null;
+  model_name: string | null;
+  n_ctx: number | null;
+  gpu_layers_offloaded: number | null;
+  prompt_tokens: number | null;
+  prompt_ms: number | null;
+  prompt_tokens_per_s: number | null;
+  generated_tokens: number | null;
+  decode_ms: number | null;
+  decode_tokens_per_s: number | null;
+  wall_first_token_ms: number | null;
+  wall_total_ms: number | null;
+  process_rss_bytes: number | null;
+  stop_type: string | null;
+}
+
+export interface SystemInfo {
+  version: string;
+  platform: string;
+  cpu_count: number | null;
+  memory: { total_bytes: number | null; available_bytes: number | null; source: string };
+  data_dir: string;
+  outputs_dir: string;
+  allowed_roots: string[];
+  llama_cpp_bin_dir: string | null;
+  network: string;
 }

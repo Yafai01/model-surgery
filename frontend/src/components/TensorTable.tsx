@@ -43,15 +43,16 @@ export default function TensorTable({ scan }: { scan: ScanResult }) {
   const orderNote = scan.tensors[0]?.shape_order === "ggml" ? "GGML order: first dimension is contiguous (ne0)" : "row-major order (PyTorch convention)";
 
   const th = (key: SortKey, label: string, num = false) => (
-    <th
-      className={`sortable ${num ? "num" : ""}`}
-      onClick={() => {
-        setSort((s) => ({ key, dir: s.key === key ? ((-s.dir) as 1 | -1) : 1 }));
-        setPage(0);
-      }}
-      aria-sort={sort.key === key ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
-    >
-      {label} {sort.key === key ? (sort.dir === 1 ? "▲" : "▼") : ""}
+    <th className={`sortable ${num ? "num" : ""}`} aria-sort={sort.key === key ? (sort.dir === 1 ? "ascending" : "descending") : "none"}>
+      <button
+        className="th-button"
+        onClick={() => {
+          setSort((s) => ({ key, dir: s.key === key ? ((-s.dir) as 1 | -1) : 1 }));
+          setPage(0);
+        }}
+      >
+        {label} {sort.key === key ? (sort.dir === 1 ? "▲" : "▼") : ""}
+      </button>
     </th>
   );
 

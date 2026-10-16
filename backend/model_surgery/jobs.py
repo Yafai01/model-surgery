@@ -49,6 +49,9 @@ _PROGRESS_PCT = re.compile(r"(\d{1,3})%\|")
 _DRY_SIZE = re.compile(r"(model|quant) size\s*=\s*([\d.]+)\s*MiB\s*\(([\d.]+)\s*BPW\)")
 
 
+_NON_TEXT = re.compile(r"(vision|visual|image|audio|mm_projector|multi_modal_projector|mmproj)", re.I)
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -212,7 +215,21 @@ def validate_output(
         add("architecture preserved", g.get("general.architecture") == src_arch, f"{g.get('general.architecture')!r} (source {src_arch!r})")
     else:
         ratio = out_params / src_params if src_params else 0
-        add("parameter count", 0.95 <= ratio <= 1.05, f"{out_params:,} output elements vs {src_params:,} in safetensors ({ratio:.3%})")
+        # convert_hf_to_gguf writes only the language model; vision/audio towers go to a separate mmproj file.
+        primary = next((s.prefix for s in source.architecture.stacks if s.primary), None)
+        text_params = sum(
+            t.n_elements for t in source.tensors if (t.stack is None or t.stack == primary) and not _NON_TEXT.search(t.name)
+        )
+        text_ratio = out_params / text_params if text_params else 0
+        if 0.95 <= ratio <= 1.05:
+            add("parameter count", True, f"{out_params:,} output elements vs {src_params:,} in safetensors ({ratio:.3%})")
+        else:
+            add(
+                "parameter count",
+                0.95 <= text_ratio <= 1.05,
+                f"{out_params:,} output elements vs {text_params:,} language-model elements in safetensors ({text_ratio:.3%}); "
+                f"{src_params - text_params:,} vision/audio/auxiliary elements are not part of the GGUF",
+            )
         add("architecture present", isinstance(g.get("general.architecture"), str), f"general.architecture = {g.get('general.architecture')!r}")
 
     ft = g.get("general.file_type")
@@ -541,6 +558,16 @@ class JobManager:
             self._finish(st, "failed", error=f"could not start tool: {e}")
             return
         st.proc = proc
+        try:
+            self._supervise(st, proc, scan, expected_ftype, partial, final)
+        except Exception as e:  # noqa: BLE001 - a crashed worker must never leave the job slot blocked
+            if proc.poll() is None:
+                proc.kill()
+            _remove(partial)
+            self._finish(st, "failed", error=f"internal error while running the job: {type(e).__name__}: {e}; partial output removed")
+
+    def _supervise(self, st: _JobState, proc: subprocess.Popen, scan: ScanResult, expected_ftype: int | None, partial: Path, final: Path) -> None:
+        job, plan = st.job, st.job.plan
         buf = b""
         assert proc.stdout is not None
         while True:
@@ -592,7 +619,7 @@ class JobManager:
             out_scan = scan_path(str(final), self.settings)
             self.history.save_scan(out_scan)
             job.output_scan_id = out_scan.id
-        except ScanError as e:  # validation already passed; record but do not fail
+        except Exception as e:  # noqa: BLE001 - validation already passed; record but do not fail
             st.log.append(f"[model-surgery] post-validation scan failed: {e}")
         job.progress = 1.0
         self._finish(st, "succeeded")
@@ -633,7 +660,9 @@ class JobManager:
         return Job.model_validate(data)
 
     def list(self) -> list[Job]:
-        live = {jid: self.get(jid) for jid in self._jobs}
+        with self._lock:
+            ids = list(self._jobs)
+        live = {jid: self.get(jid) for jid in ids}
         stored = [Job.model_validate(d) for d in self.history.list_jobs()]
         out = [live.get(j.id, j) for j in stored]
         for jid, j in live.items():

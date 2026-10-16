@@ -2,7 +2,7 @@ import { type DragEvent, useCallback, useEffect, useRef, useState } from "react"
 import { BROWSER_EDITION, api } from "../api";
 import { fmtBytes, fmtCount, fmtTime } from "../format";
 import type { FsEntry, FsListing, FsRoot, ScanResult, ScanSummary } from "../types";
-import { Callout, Spinner } from "./common";
+import { Callout, Spinner, activate } from "./common";
 import HubImport from "./HubImport";
 
 interface Props {
@@ -322,7 +322,15 @@ function LocalImport({ onScanned, onError, recent, onOpen }: Props) {
           <div className="fs-list">
             {listing?.entries.length === 0 && <div className="empty small">No folders or model files here.</div>}
             {listing?.entries.map((e) => (
-              <div key={e.path} className="fs-row" onClick={() => clickEntry(e)} onDoubleClick={() => e.type === "file" && scan(e.path)}>
+              <div
+                key={e.path}
+                className="fs-row"
+                role="button"
+                aria-label={`${e.type === "dir" ? "Open folder" : "Select file"} ${e.name}`}
+                onClick={() => clickEntry(e)}
+                onDoubleClick={() => e.type === "file" && scan(e.path)}
+                {...activate(() => clickEntry(e))}
+              >
                 <span className="nav-icon" aria-hidden>
                   {e.type === "dir" ? (e.is_model_dir ? "▣" : "▸") : KIND_ICON[e.kind ?? ""] ?? "·"}
                 </span>

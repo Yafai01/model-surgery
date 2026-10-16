@@ -408,7 +408,12 @@ def _fit(scan: ScanResult, p: DeviceProfile, comps: list[MemoryComponent], sel: 
             budget = usable - fixed - out_bytes
             gpu_layers = max(0, min(total_layers, budget // per_layer if per_layer else 0))
             host_need = total - (gpu_layers * per_layer) - fixed
-            if gpu_layers > 0 and (p.host_ram_bytes is None or host_need <= p.host_ram_bytes):
+            if gpu_layers >= total_layers:
+                verdict = "tight"
+                notes.append(
+                    f"all {total_layers} layers fit in VRAM only because llama.cpp keeps the token-embedding table in host RAM; little headroom"
+                )
+            elif gpu_layers > 0 and (p.host_ram_bytes is None or host_need <= p.host_ram_bytes):
                 verdict = "partial_offload"
                 notes.append(f"about {gpu_layers} of {total_layers} layers fit in VRAM; the rest run from system RAM (much slower)")
             else:

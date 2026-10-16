@@ -3,7 +3,7 @@ import type { Tab } from "../App";
 import { BROWSER_EDITION, api } from "../api";
 import { fmtBytes, fmtTime } from "../format";
 import type { Job, Plan, ScanResult, ToolDryRun, ToolsReport } from "../types";
-import { Callout, List, Spinner } from "./common";
+import { Callout, List, Spinner, activate } from "./common";
 
 // Mirrors backend jobs.IMATRIX_REQUIRED: llama-quantize refuses these without an importance matrix.
 const IMATRIX_REQUIRED = new Set(["IQ1_S", "IQ1_M", "IQ2_XXS", "IQ2_XS", "IQ2_S", "Q2_K_S"]);
@@ -100,6 +100,8 @@ function QuantizeWorkflow({ scan, onError, onOpenScan, onHistoryChanged }: Props
   const [job, setJob] = useState<Job | null>(null);
   const [jobs, setJobs] = useState<Job[]>([]);
   const logRef = useRef<HTMLPreElement>(null);
+  // Incremented whenever the plan inputs change, so a plan response for old inputs is discarded.
+  const planSeq = useRef(0);
 
   const loadTools = useCallback(
     async (refresh = false) => {
@@ -147,6 +149,7 @@ function QuantizeWorkflow({ scan, onError, onOpenScan, onHistoryChanged }: Props
 
   // any change to inputs invalidates the plan and the confirmation
   useEffect(() => {
+    planSeq.current++;
     setPlan(null);
     setDry(null);
     setConfirmed(false);
@@ -155,9 +158,11 @@ function QuantizeWorkflow({ scan, onError, onOpenScan, onHistoryChanged }: Props
   // poll the active job
   useEffect(() => {
     if (!job || !ACTIVE.has(job.status)) return;
+    let cancelled = false; // a poll that resolves after the user selected another job must not overwrite it
     const t = setInterval(async () => {
       try {
         const j = await api.job(job.id);
+        if (cancelled) return;
         setJob(j);
         if (!ACTIVE.has(j.status)) {
           loadJobs();
@@ -167,7 +172,10 @@ function QuantizeWorkflow({ scan, onError, onOpenScan, onHistoryChanged }: Props
         onError((e as Error).message);
       }
     }, 1000);
-    return () => clearInterval(t);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
   }, [job, loadJobs, onError, onHistoryChanged]);
 
   useEffect(() => {
@@ -189,17 +197,17 @@ function QuantizeWorkflow({ scan, onError, onOpenScan, onHistoryChanged }: Props
     setPlanning(true);
     setDry(null);
     setConfirmed(false);
+    const seq = ++planSeq.current;
     try {
-      setPlan(
-        await api.plan({
+      const p = await api.plan({
           scan_id: scan.id,
           operation,
           target,
           output_dir: outputDir.trim() || null,
           allow_requantize: allowRequant,
           threads: threads ? Number(threads) : null,
-        }),
-      );
+        });
+      if (seq === planSeq.current) setPlan(p);
     } catch (e) {
       onError((e as Error).message);
     } finally {
@@ -468,7 +476,7 @@ function QuantizeWorkflow({ scan, onError, onOpenScan, onHistoryChanged }: Props
               </thead>
               <tbody>
                 {jobs.map((j) => (
-                  <tr key={j.id} onClick={() => api.job(j.id).then(setJob).catch(() => undefined)} style={{ cursor: "pointer" }}>
+                  <tr key={j.id} onClick={() => api.job(j.id).then(setJob).catch(() => undefined)} {...activate(() => api.job(j.id).then(setJob).catch(() => undefined))} style={{ cursor: "pointer" }}>
                     <td className="nowrap small">{fmtTime(j.created_at)}</td>
                     <td className="nowrap">
                       {j.plan.operation} → <span className="mono">{j.plan.target}</span>

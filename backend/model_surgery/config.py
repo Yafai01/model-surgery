@@ -47,7 +47,8 @@ class Settings:
         if not self.allowed_roots:
             return True
         rp = path.resolve()
-        for root in self.allowed_roots:
+        # Model Surgery's own output folder is always browsable/scannable, so produced models can be re-inspected.
+        for root in [*self.allowed_roots, self.outputs_dir]:
             try:
                 rp.relative_to(root.resolve())
                 return True

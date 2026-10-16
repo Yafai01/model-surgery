@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { download, fmtBytes, fmtTime } from "../format";
 import type { Comparison, ScanResult, ScanSummary } from "../types";
@@ -27,8 +27,12 @@ export default function ReportsPage({ scan, history, onError }: Props) {
   const [cmp, setCmp] = useState<Comparison | null>(null);
   const [cmpBusy, setCmpBusy] = useState(false);
   const [onlyDiff, setOnlyDiff] = useState(false);
+  const selRef = useRef("");
+  selRef.current = `${a}|${b}|${ctx}|${device}`;
 
   useEffect(() => setMd(null), [scan?.id]);
+  // A shown comparison must always match the current selection (the Markdown export uses the selection).
+  useEffect(() => setCmp(null), [a, b, ctx, device]);
 
   const buildMd = async () => {
     if (!scan) return;
@@ -56,8 +60,10 @@ export default function ReportsPage({ scan, history, onError }: Props) {
   const runCompare = async () => {
     if (!a || !b) return;
     setCmpBusy(true);
+    const want = `${a}|${b}|${ctx}|${device}`;
     try {
-      setCmp(await api.compare(a, b, ctx, device));
+      const c = await api.compare(a, b, ctx, device);
+      if (want === selRef.current) setCmp(c);
     } catch (e) {
       onError((e as Error).message);
     } finally {
@@ -76,7 +82,10 @@ export default function ReportsPage({ scan, history, onError }: Props) {
     }
   };
 
-  const copy = (text: string) => navigator.clipboard?.writeText(text).catch(() => onError("clipboard unavailable"));
+  const copy = (text: string) => {
+    if (!navigator.clipboard) return onError("clipboard unavailable on this origin; use Download instead");
+    navigator.clipboard.writeText(text).catch(() => onError("clipboard unavailable; use Download instead"));
+  };
 
   let section = "";
   return (

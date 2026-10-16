@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS jobs (
 """
 
 
+def _sql_int(v: object) -> int | None:
+    """SQLite INTEGER is 64-bit; a crafted header can declare more elements than that. Store NULL instead of failing."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and -(2**63) <= v < 2**63 else None
+
+
 class History:
     def __init__(self, db_path: Path):
         self.db_path = db_path
@@ -65,7 +70,7 @@ class History:
         with self._conn() as c:
             c.execute(
                 "INSERT OR REPLACE INTO scans VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (r.id, r.scanned_at, r.path, r.kind, r.name, r.total_size_bytes, r.fact_value("n_params"), r.quantization.label, int(r.integrity.valid), blob),
+                (r.id, r.scanned_at, r.path, r.kind, r.name, _sql_int(r.total_size_bytes), _sql_int(r.fact_value("n_params")), r.quantization.label, int(r.integrity.valid), blob),
             )
 
     def get_scan(self, scan_id: str) -> ScanResult | None:

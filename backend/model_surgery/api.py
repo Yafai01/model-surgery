@@ -11,14 +11,20 @@ Defences for a local web app:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import string
 import sys
+import threading
+import uuid
+from contextlib import asynccontextmanager
+from urllib.parse import quote
 from pathlib import Path
 from typing import Literal
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -30,8 +36,10 @@ from .history import History
 from .jobs import ExecuteRequest, Job, JobManager, Plan, PlanRequest
 from .memory import SCHEMES, MemoryEstimate, MemoryRequest, estimate_memory
 from .reports import Comparison, compare, comparison_markdown, markdown_report, tensors_csv
+from .runtime import GenerateRequest, Measurement, RuntimeManager, RuntimeStartRequest, RuntimeStatus, TokenizeRequest
 from .scanner import ScanError, scan_path
 from .schemas import ScanResult, ScanSummary
+from .system import system_memory
 from .tooling import ToolsReport
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
@@ -91,16 +99,23 @@ class FsRoot(BaseModel):
     path: str
 
 
-def create_app(settings: Settings | None = None, job_manager: JobManager | None = None) -> FastAPI:
+def create_app(settings: Settings | None = None, job_manager: JobManager | None = None, runtime_manager: RuntimeManager | None = None) -> FastAPI:
     settings = settings or load_settings()
     settings.ensure_dirs()
     history = History(settings.db_path)
     jobs = job_manager or JobManager(settings, history)
+    runtime = runtime_manager or RuntimeManager(settings)
 
-    app = FastAPI(title="Model Surgery", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None)
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        yield
+        runtime.shutdown()  # never leave a llama-server process behind
+
+    app = FastAPI(title="Model Surgery", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json", redoc_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.history = history
     app.state.jobs = jobs
+    app.state.runtime = runtime
     app.add_middleware(_Guard, allowed_hosts=LOOPBACK_HOSTS | {h.lower() for h in settings.extra_allowed_hosts})
 
     @app.exception_handler(ScanError)
@@ -191,15 +206,21 @@ def create_app(settings: Settings | None = None, job_manager: JobManager | None 
         Only remote (hf://) scans are accepted, so an imported record can never point at a local path
         that the quantization workflow would act on.
         """
-        body = await request.body()
-        if len(body) > MAX_IMPORT_BYTES:
+        declared = request.headers.get("content-length")
+        if declared is not None and (not declared.isdigit() or int(declared) > MAX_IMPORT_BYTES):
             raise HTTPException(413, "scan too large")
+        body = b""
+        async for chunk in request.stream():
+            body += chunk
+            if len(body) > MAX_IMPORT_BYTES:
+                raise HTTPException(413, "scan too large")
         try:
             r = ScanResult.model_validate_json(body)
         except ValueError as e:
             raise HTTPException(422, f"invalid scan: {str(e)[:300]}") from None
         if not r.is_remote or not all(f.path.startswith("hf://") for f in r.files):
             raise HTTPException(400, "only Hugging Face Hub (hf://) scans can be imported")
+        r.id = uuid.uuid4().hex  # never trust a client-chosen id: it could overwrite an existing local scan
         history.save_scan(r)
         return r
 
@@ -220,7 +241,8 @@ def create_app(settings: Settings | None = None, job_manager: JobManager | None 
     @app.get("/api/scans/{scan_id}/export")
     def export(scan_id: str, format: Literal["json", "csv", "md"] = "json") -> Response:
         r = _scan(scan_id)
-        stem = "".join(c if c.isalnum() or c in "-_." else "-" for c in r.name)[:60] or "model"
+        # HTTP headers are Latin-1: keep the fallback filename ASCII and send the real name as RFC 5987 filename*.
+        stem = "".join(c if (c.isascii() and c.isalnum()) or c in "-_." else "-" for c in r.name)[:60].strip("-.") or "model"
         if format == "json":
             body, media = r.model_dump_json(indent=2), "application/json"
         elif format == "csv":
@@ -228,7 +250,8 @@ def create_app(settings: Settings | None = None, job_manager: JobManager | None 
         else:
             body, media = markdown_report(r), "text/markdown; charset=utf-8"
         suffix = {"json": "scan.json", "csv": "tensors.csv", "md": "report.md"}[format]
-        return Response(body, media_type=media, headers={"Content-Disposition": f'attachment; filename="{stem}.{suffix}"'})
+        utf8_name = quote(f"{r.name[:60]}.{suffix}", safe="")
+        return Response(body, media_type=media, headers={"Content-Disposition": f"attachment; filename=\"{stem}.{suffix}\"; filename*=UTF-8''{utf8_name}"})
 
     # -- memory -------------------------------------------------------------
     @app.get("/api/devices", response_model=list[DeviceProfile])
@@ -259,8 +282,13 @@ def create_app(settings: Settings | None = None, job_manager: JobManager | None 
 
     # -- tools & jobs -------------------------------------------------------------
     @app.get("/api/tools", response_model=ToolsReport)
-    def tools(refresh: bool = False) -> ToolsReport:
-        return jobs.tools(refresh)
+    def tools() -> ToolsReport:
+        return jobs.tools(False)
+
+    # Re-detection runs subprocesses, so it is a POST (CSRF header required), not a GET any page could trigger.
+    @app.post("/api/tools/refresh", response_model=ToolsReport)
+    def tools_refresh() -> ToolsReport:
+        return jobs.tools(True)
 
     @app.post("/api/quantize/plan", response_model=Plan)
     def plan(req: PlanRequest) -> Plan:
@@ -288,6 +316,76 @@ def create_app(settings: Settings | None = None, job_manager: JobManager | None 
     @app.post("/api/quantize/jobs/{job_id}/cancel", response_model=Job)
     def cancel_job(job_id: str) -> Job:
         return jobs.cancel(job_id)
+
+    # -- local inference (llama-server) ---------------------------------------------
+    @app.get("/api/runtime", response_model=RuntimeStatus)
+    def runtime_status() -> RuntimeStatus:
+        return runtime.status()
+
+    @app.post("/api/runtime/start", response_model=RuntimeStatus)
+    def runtime_start(req: RuntimeStartRequest) -> RuntimeStatus:
+        return runtime.start(req, _scan(req.scan_id))
+
+    @app.post("/api/runtime/stop", response_model=RuntimeStatus)
+    def runtime_stop() -> RuntimeStatus:
+        return runtime.stop()
+
+    @app.post("/api/runtime/tokenize")
+    def runtime_tokenize(req: TokenizeRequest) -> dict:
+        return runtime.tokenize(req)
+
+    @app.post("/api/runtime/cancel")
+    def runtime_cancel() -> dict:
+        return {"cancelled": runtime.cancel_generation()}
+
+    @app.get("/api/runtime/measurements", response_model=list[Measurement])
+    def runtime_measurements() -> list[Measurement]:
+        return runtime.measurements()
+
+    @app.post("/api/runtime/generate")
+    async def runtime_generate(req: GenerateRequest, request: Request) -> StreamingResponse:
+        gen = runtime.generate(req)  # raises 409 before the stream starts if not ready / busy
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def pump() -> None:
+            for ev in gen.events():
+                loop.call_soon_threadsafe(queue.put_nowait, ev)
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        threading.Thread(target=pump, name=f"generate-{gen.id}", daemon=True).start()
+
+        async def body():
+            try:
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(queue.get(), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        if await request.is_disconnected():
+                            gen.cancel()
+                        continue
+                    if ev is None:
+                        return
+                    yield json.dumps(ev) + "\n"
+            finally:
+                gen.cancel()  # client went away or the stream ended; no-op once finished
+
+        return StreamingResponse(body(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store"})
+
+    # -- system -------------------------------------------------------------------
+    @app.get("/api/system")
+    def system() -> dict:
+        return {
+            "version": __version__,
+            "platform": sys.platform,
+            "cpu_count": os.cpu_count(),
+            "memory": system_memory().model_dump(),
+            "data_dir": str(settings.data_dir),
+            "outputs_dir": str(settings.outputs_dir),
+            "allowed_roots": [str(r) for r in settings.allowed_roots],
+            "llama_cpp_bin_dir": str(settings.llama_cpp_bin_dir) if settings.llama_cpp_bin_dir else None,
+            "network": "Model Surgery itself makes no outbound requests. The page contacts huggingface.co only when you inspect a Hub link.",
+        }
 
     # -- bundled frontend ---------------------------------------------------------
     if settings.frontend_dist and (settings.frontend_dist / "index.html").is_file():

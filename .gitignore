@@ -12,3 +12,5 @@ frontend/dist-browser/
 .vercel
 
 .vercel
+frontend/test-results/
+frontend/playwright-report/

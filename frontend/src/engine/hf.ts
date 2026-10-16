@@ -126,7 +126,10 @@ export async function readHFFolder(files: FileLike[]): Promise<HFFolder> {
     try {
       return { f, st: await readSafetensors(f) };
     } catch (e) {
-      return { f, err: (e as Error).message };
+      // Only a malformed header is an integrity error. Read/network failures (e.g. a 429 from the Hub) abort
+      // the scan, as in the Python engine; otherwise a partial result with wrong counts would be saved.
+      if (!(e instanceof FormatError)) throw e;
+      return { f, err: e.message };
     }
   });
   const shards: { file: FileLike; st: SafetensorsFile }[] = [];

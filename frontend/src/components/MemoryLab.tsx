@@ -2,12 +2,13 @@ import { type ChangeEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../api";
 import { fmtBytes, fmtInt } from "../format";
 import type { DeviceProfile, FitResult, KvType, MemoryEstimate, MemoryRequest, ScanResult } from "../types";
-import { Callout, EstimateBanner, List, Prov, Spinner } from "./common";
+import { Callout, EstimateBanner, List, Prov, Spinner, activate } from "./common";
+import MeasuredPanel from "./MeasuredPanel";
 
 const CTX_PRESETS = [512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072];
 const GiB = 1024 ** 3;
 const MiB = 1024 ** 2;
-const SEG_COLORS: Record<string, string> = { weights: "#2dd4bf", kv_cache: "#38bdf8", compute: "#a78bfa", runtime: "#94a3b8" };
+const SEG_COLORS: Record<string, string> = { weights: "#14b8a6", kv_cache: "#0a84ff", compute: "#8b5cf6", runtime: "#9ca3af" };
 const VERDICT: Record<FitResult["verdict"], string> = {
   fits: "Fits",
   tight: "Tight fit",
@@ -85,11 +86,13 @@ export default function MemoryLab({ scan, onError }: { scan: ScanResult; onError
     <div className="page">
       <div className="page-head">
         <div>
-          <h2>Memory laboratory</h2>
-          <p>Weight storage and inference memory for different precisions, context lengths and target devices.</p>
+          <h2>Performance & memory</h2>
+          <p>What this model needs (estimated from its metadata) and what it actually used on this machine (measured), kept visibly apart.</p>
         </div>
         {loading && <Spinner />}
       </div>
+      <MeasuredPanel scan={scan} />
+      <h3 style={{ marginTop: 4 }}>Estimates</h3>
       <EstimateBanner />
 
       <div className="grid" style={{ gridTemplateColumns: "minmax(280px, 340px) minmax(0, 1fr)" }}>
@@ -308,7 +311,7 @@ export default function MemoryLab({ scan, onError }: { scan: ScanResult; onError
                     </thead>
                     <tbody>
                       {est.weights.map((w) => (
-                        <tr key={w.id} className={w.id === est.selected_weights.id ? "selected" : ""} onClick={() => set("weight_format", w.id)} style={{ cursor: "pointer" }}>
+                        <tr key={w.id} className={w.id === est.selected_weights.id ? "selected" : ""} onClick={() => set("weight_format", w.id)} aria-selected={w.id === est.selected_weights.id} {...activate(() => set("weight_format", w.id))} style={{ cursor: "pointer" }}>
                           <td className="nowrap">
                             {w.label}
                             {Object.keys(w.type_mix).length > 0 && (

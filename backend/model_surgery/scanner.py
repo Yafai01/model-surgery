@@ -113,7 +113,12 @@ def _facts_from_gguf(g: GGUFFile, facts: _Facts, notes: list[str]) -> str | None
     def kv(label: str, key: str, suffix: str) -> None:
         full = f"{arch}.{suffix}"
         if full in g.metadata:
-            facts.add(key, label, _scalarize(g.get(full), full, notes), "verified", full)
+            v = _scalarize(g.get(full), full, notes)
+            # Hyperparameters feed arithmetic in the estimator: only real numbers are accepted (not bool/str).
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                facts.add(key, label, v, "verified", full)
+            else:
+                notes.append(f"{full} has a non-numeric value ({type(g.get(full)).__name__}); ignored")
 
     kv("Layers", "n_layers", "block_count")
     kv("Hidden size", "hidden_size", "embedding_length")
@@ -181,6 +186,12 @@ def _facts_from_hf(config: dict[str, Any], facts: _Facts, notes: list[str]) -> s
             if isinstance(v, list) and v and all(isinstance(x, (int, float)) for x in v):
                 facts.add(key, label, _scalarize(v, n, notes), "verified", f"{lm_src}:{n}")
                 break
+    # DeepSeek-V2/V3 (MLA): per-head K = nope + rope dims, V has its own width.
+    nope, rope, vdim = lm.get("qk_nope_head_dim"), lm.get("qk_rope_head_dim"), lm.get("v_head_dim")
+    if all(isinstance(x, int) and not isinstance(x, bool) and x > 0 for x in (nope, rope)):
+        facts.add("head_dim", "Head dim (K)", nope + rope, "derived", f"{lm_src}:qk_nope_head_dim + qk_rope_head_dim", override=True)
+        if isinstance(vdim, int) and not isinstance(vdim, bool) and vdim > 0:
+            facts.add("head_dim_v", "Head dim (V)", vdim, "verified", f"{lm_src}:v_head_dim", override=True)
     if facts.get("n_kv_heads") is None and lm.get("multi_query") is True:
         facts.add("n_kv_heads", "KV heads", 1, "verified", f"{lm_src}:multi_query")
     tie = lm.get("tie_word_embeddings")
@@ -222,7 +233,12 @@ def _complete_facts(facts: _Facts, tensors: list[TensorRecord], notes: list[str]
             facts.add("vocab_size", "Vocabulary size", vocab, "inferred", f"shape of {emb.name}")
 
     layer_idx = {t.layer for t in tensors if t.layer is not None and t.stack is not None}
-    stacks = Counter(t.stack for t in tensors if t.stack is not None)
+    # Primary stack = the one with the most weight bytes (same rule as build_architecture), so a CLIP
+    # vision tower with many small tensors never supplies the language model's layer count.
+    stacks: Counter[str] = Counter()
+    for t in tensors:
+        if t.stack is not None:
+            stacks[t.stack] += t.n_bytes if t.n_bytes is not None else t.n_elements
     if stacks:
         primary = stacks.most_common(1)[0][0]
         n_l = len({t.layer for t in tensors if t.stack == primary})

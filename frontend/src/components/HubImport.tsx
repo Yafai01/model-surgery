@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { fmtBytes } from "../format";
 import { getHubToken, setHubToken } from "../hubSession";
@@ -14,6 +14,9 @@ export default function HubImport({ onScanned }: { onScanned: (r: ScanResult) =>
   const [error, setError] = useState<string | null>(null);
   const [showToken, setShowToken] = useState(!!getHubToken());
   const [token, setToken] = useState(getHubToken() ?? "");
+  const ctrl = useRef<AbortController | null>(null);
+  // Leaving the page cancels an in-flight Hub scan, so a late result can never replace what the user opened since.
+  useEffect(() => () => ctrl.current?.abort(), []);
 
   const inspect = async (value: string) => {
     if (!value.trim()) return;
@@ -22,14 +25,21 @@ export default function HubImport({ onScanned }: { onScanned: (r: ScanResult) =>
     setError(null);
     setProgress(null);
     setHubToken(token);
+    ctrl.current?.abort();
+    const c = (ctrl.current = new AbortController());
     try {
-      onScanned(await api.scanHub(value, { token: getHubToken(), onProgress: setProgress }));
+      const r = await api.scanHub(value, { token: getHubToken(), onProgress: setProgress, signal: c.signal });
+      if (!c.signal.aborted) onScanned(r);
     } catch (e) {
+      if (c.signal.aborted) return;
       const msg = (e as Error).message;
       setError(msg);
       if (/gated|token|private/i.test(msg)) setShowToken(true);
     } finally {
-      setBusy(false);
+      if (ctrl.current === c) {
+        ctrl.current = null;
+        setBusy(false);
+      }
     }
   };
 
@@ -59,6 +69,11 @@ export default function HubImport({ onScanned }: { onScanned: (r: ScanResult) =>
         <button className="btn primary" type="submit" disabled={busy || !link.trim()}>
           {busy ? <Spinner /> : "Inspect"}
         </button>
+        {busy && (
+          <button className="btn" type="button" onClick={() => ctrl.current?.abort()}>
+            Cancel
+          </button>
+        )}
       </form>
       <div className="row small" style={{ marginTop: 10, gap: 6 }}>
         <span className="faint">Try:</span>
